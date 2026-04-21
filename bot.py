@@ -337,9 +337,7 @@ class ProwlarrDiscordClient(discord.Client):
 
 
 def register_commands(client: ProwlarrDiscordClient) -> None:
-    @client.tree.command(name="buscar", description="Busca torrents usando Prowlarr")
-    @app_commands.describe(query="Texto a buscar")
-    async def buscar(interaction: discord.Interaction, query: str) -> None:
+    async def handle_search_command(interaction: discord.Interaction, query: str) -> None:
         if interaction.channel_id != client.config.allowed_channel_id:
             await interaction.response.send_message(
                 "Este comando solo funciona en el canal designado.",
@@ -396,6 +394,16 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
             wait=True,
         )
         view.message = message
+
+    @client.tree.command(name="buscar", description="Busca torrents usando Prowlarr")
+    @app_commands.describe(query="Texto a buscar")
+    async def buscar(interaction: discord.Interaction, query: str) -> None:
+        await handle_search_command(interaction, query)
+
+    @client.tree.command(name="piratear", description="Alias de /buscar para buscar torrents")
+    @app_commands.describe(query="Texto a buscar")
+    async def piratear(interaction: discord.Interaction, query: str) -> None:
+        await handle_search_command(interaction, query)
 
 
 async def async_main() -> None:

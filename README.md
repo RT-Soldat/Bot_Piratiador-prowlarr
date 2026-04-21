@@ -1,6 +1,6 @@
 # Bot de Discord para Prowlarr
 
-Bot ligero en Python 3.12 que expone el comando `/buscar` en Discord, consulta una instancia existente de Prowlarr y entrega magnet links o archivos `.torrent` como fallback. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`.
+Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega magnet links o archivos `.torrent` como fallback. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`.
 
 ## Requisitos previos
 
@@ -11,7 +11,7 @@ Bot ligero en Python 3.12 que expone el comando `/buscar` en Discord, consulta u
 ## Setup
 
 1. Crea la aplicación y el bot en https://discord.com/developers/applications.
-2. En el bot, habilita `Message Content Intent` si quieres dejar preparado el bot para futuras extensiones. Para `/buscar` no es estrictamente necesario.
+2. En el bot, habilita `Message Content Intent` si quieres dejar preparado el bot para futuras extensiones. Para `/buscar` y `/piratear` no es estrictamente necesario.
 3. Invita el bot al servidor con scope `bot applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files` y `Use Slash Commands`.
 4. Copia `.env.example` a `.env` y completa las variables obligatorias.
 5. Levanta el servicio:
@@ -31,14 +31,15 @@ docker compose logs -f
 | Variable | Obligatoria | Descripcion |
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Si | Token del bot de Discord |
-| `ALLOWED_CHANNEL_ID` | Si | ID del canal donde se permite `/buscar` |
+| `ALLOWED_CHANNEL_ID` | Si | ID del canal donde se permiten `/buscar` y `/piratear` |
 | `PROWLARR_URL` | Si | URL base de Prowlarr, por ejemplo `http://prowlarr:9696` |
 | `PROWLARR_API_KEY` | Si | API key copiada desde Prowlarr |
 | `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
 
-## Comando disponible
+## Comandos disponibles
 
 - `/buscar <texto>`
+- `/piratear <texto>`
 
 ## Troubleshooting
 
