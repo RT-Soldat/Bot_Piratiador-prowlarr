@@ -111,8 +111,22 @@ class TorrentBuilder:
 
                 creator = lt.create_torrent(torrent_info)
                 if hasattr(creator, "generate_buf"):
-                    return bytes(creator.generate_buf())
-                return lt.bencode(creator.generate())
+                    try:
+                        return bytes(creator.generate_buf())
+                    except TypeError:
+                        LOGGER.debug(
+                            "generate_buf() no devolvió un tipo convertible a bytes. Reintentando con bencode(generate()).",
+                            exc_info=True,
+                        )
+
+                bencoded = lt.bencode(creator.generate())
+                if isinstance(bencoded, bytes):
+                    return bencoded
+                if isinstance(bencoded, bytearray):
+                    return bytes(bencoded)
+                if isinstance(bencoded, str):
+                    return bencoded.encode()
+                return bytes(bencoded)
             except Exception:
                 LOGGER.exception("No se pudo convertir la metadata descargada en un archivo .torrent.")
                 return None
