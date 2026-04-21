@@ -1,0 +1,14 @@
+services:
+  discord-prowlarr-bot:
+    build: .
+    container_name: discord-prowlarr-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - arr-network
+
+networks:
+  arr-network:
+    external: true
+    name: jellyfinarr-stack_default
