@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py prowlarr.py magnet.py ./
+COPY bot.py ./
+COPY discord_prowlarr_bot ./discord_prowlarr_bot
 
 RUN useradd --create-home --shell /bin/bash botuser && chown -R botuser:botuser /app
 USER botuser

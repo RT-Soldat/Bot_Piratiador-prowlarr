@@ -1,6 +1,6 @@
 # Bot de Discord para Prowlarr
 
-Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega magnet links o archivos `.torrent` como fallback. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`, y sincroniza los slash commands tanto globalmente como por servidor para que aparezcan más rápido.
+Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega resultados mediante links HTTP clickeables, redirecciones a magnet y archivos `.torrent`. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`, y sincroniza los slash commands tanto globalmente como por servidor para que aparezcan más rápido.
 
 ## Requisitos previos
 
@@ -13,7 +13,7 @@ Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Dis
 1. Crea la aplicación y el bot en https://discord.com/developers/applications.
 2. En el bot, habilita `Message Content Intent` si quieres que el bot también acepte mensajes de texto como `/buscar ubuntu` o `/piratear s04e01` además del slash command normal. Los slash commands por sí solos no dependen de este intent.
 3. Invita el bot al servidor con scope `bot applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files` y `Use Slash Commands`.
-4. Copia `.env.example` a `.env` y completa las variables obligatorias.
+4. Copia `.env.example` a `.env` y completa las variables obligatorias. Si quieres botones clickeables en Discord, configura también `BOT_PUBLIC_BASE_URL` con una URL alcanzable desde afuera.
 5. Levanta el servicio:
 
 ```bash
@@ -36,6 +36,11 @@ docker compose logs -f
 | `PROWLARR_API_KEY` | Si | API key copiada desde Prowlarr |
 | `PROWLARR_TIMEOUT` | No | Timeout de consultas a Prowlarr en segundos, por defecto `90` |
 | `ATTACH_TORRENT_FILE` | No | Si vale `true`, intenta adjuntar también el archivo `.torrent` junto al magnet cuando esté disponible |
+| `BOT_HTTP_LISTEN_HOST` | No | Host donde escucha el servidor HTTP interno del bot, por defecto `0.0.0.0` |
+| `BOT_HTTP_LISTEN_PORT` | No | Puerto HTTP para links clickeables y healthcheck, por defecto `9987` |
+| `BOT_PUBLIC_BASE_URL` | No | URL pública base usada para construir botones `http(s)://` en Discord |
+| `TORRENT_FETCH_TIMEOUT` | No | Tiempo máximo en segundos para resolver metadata vía DHT, por defecto `45` |
+| `LIBTORRENT_LISTEN_PORT` | No | Puerto que usa libtorrent para DHT, por defecto `6881` |
 | `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
 
 ## Comandos disponibles
@@ -47,20 +52,30 @@ También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/b
 
 ## Entrega de resultados
 
-Por defecto, al seleccionar un resultado el bot entrega el magnet.
+Al seleccionar un resultado, el bot intenta resolver la mejor salida disponible:
 
-- Si el resultado trae `magnetUrl`, el bot lo usa.
-- Si no hay `magnetUrl` pero sí `infoHash`, el bot construye un magnet compacto con trackers públicos.
-- Si el `downloadUrl` de Prowlarr redirige a `magnet:`, el bot aprovecha ese magnet en vez de marcar error.
-- El mensaje intenta incluir un botón `Abrir magnet` además del magnet en texto plano.
+- Si Prowlarr devuelve un `.torrent`, lo usa directamente.
+- Si el indexer solo ofrece magnet, el bot intenta obtener metadata vía DHT usando `libtorrent`.
+- Si `BOT_PUBLIC_BASE_URL` está configurado, publica botones HTTP clickeables:
+  - `Descargar .torrent` apunta a `/t/<id>`
+  - `Abrir magnet` apunta a `/m/<id>` y redirige a `magnet:?`
+- Si no hay URL pública, el bot cae a adjuntos o al magnet en texto plano.
 
-Si en el `.env` configuras:
+Si además configuras:
 
 ```env
 ATTACH_TORRENT_FILE=true
 ```
 
-el bot intentará adjuntar también el archivo `.torrent` en el mismo mensaje cuando Prowlarr pueda descargarlo. Si el tracker solo redirige a un magnet y no entrega `.torrent`, el bot enviará únicamente el magnet.
+el bot adjuntará también el archivo `.torrent` cuando lo tenga disponible, incluso si tuvo que generarlo localmente desde el magnet.
+
+El bot expone además:
+
+```bash
+curl http://localhost:9987/health
+```
+
+para verificar que el servidor HTTP embebido está arriba.
 
 ## Troubleshooting
 
@@ -81,6 +96,13 @@ el bot intentará adjuntar también el archivo `.torrent` en el mismo mensaje cu
 ### El bot no puede enviar archivos
 
 - Revisa que el bot tenga permisos `Attach Files` en el canal configurado.
+
+### Los botones no funcionan
+
+- Confirma que `BOT_PUBLIC_BASE_URL` apunte al host correcto y no termine con `/`.
+- Verifica que el puerto `9987` esté publicado en Docker y accesible desde afuera.
+- Si el `.torrent` tarda mucho en generarse para magnets viejos o con poco swarm, prueba subiendo `TORRENT_FETCH_TIMEOUT`.
+- Comprueba el endpoint `http://<tu-host>:9987/health`.
 
 ### El comando responde fuera del canal esperado
 

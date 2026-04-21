@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "9987:9987"
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
     networks:
       - arr-network
 

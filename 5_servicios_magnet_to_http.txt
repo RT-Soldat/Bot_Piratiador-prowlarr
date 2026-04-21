@@ -1,0 +1,201 @@
+================================================================================
+5 SERVICIOS PARA CONVERTIR MAGNET LINKS → LINKS HTTP CLICKEABLES
+(Para integrar en un bot de Discord)
+================================================================================
+
+La idea: el bot manda el magnet a uno de estos servicios via API,
+obtiene un link HTTP directo de vuelta, y ese link SÍ es clickeable
+en Discord.
+
+================================================================================
+1. SEEDR.CC  ⭐ (RECOMENDADO - Tiene API oficial)
+================================================================================
+Web:     https://www.seedr.cc
+API:     https://www.seedr.cc/products/integrations/
+Wrapper: https://github.com/theabbie/seedr-api  (Node.js)
+         https://github.com/AnjanaMadu/SeedrAPI  (Python)
+
+Plan gratis: 2 GB de almacenamiento
+API gratis:  Sí (operaciones básicas, rate-limited)
+Premium:     Desbloquea rate limits más altos
+
+Cómo funciona con el bot:
+  1. Bot envía magnet link a Seedr vía API
+  2. Seedr descarga el torrent en su nube
+  3. Bot obtiene URL directa HTTP del archivo
+  4. Bot manda ese link clickeable en Discord
+
+Ejemplo con Node.js (usando seedr-api):
+  const Seedr = require("seedr");
+  const seedr = new Seedr();
+  await seedr.login("email@example.com", "password");
+  await seedr.addMagnet("magnet:?xt=urn:btih:...");
+  // Esperar a que termine la descarga...
+  const contents = await seedr.getVideos();
+  // contents tiene URLs directas HTTP para cada archivo
+
+Pros: API oficial bien documentada, wrappers en Node.js y Python,
+      genera links directos de descarga y streaming.
+Cons: 2 GB gratis es poco, hay que esperar que Seedr descargue.
+
+================================================================================
+2. TORRENTSAFE.COM
+================================================================================
+Web: https://www.torrentsafe.com
+
+Plan gratis: Sí (con limitaciones)
+API:         No tiene API pública oficial
+
+Cómo funciona:
+  - Pegas el magnet, TorrentSafe descarga el archivo, te da link directo.
+  - Sin registro para uso básico.
+  - Descargas anónimas, zero-logging.
+
+Integración con bot (scraping/automatización):
+  Como no tiene API, habría que automatizar con puppeteer o similar:
+  1. Bot envía magnet a TorrentSafe via HTTP POST
+  2. Scrapea la página de resultado para obtener el link directo
+  3. Manda el link en Discord
+
+  // Pseudocódigo - habría que inspeccionar las requests de la web
+  const response = await fetch('https://www.torrentsafe.com/api/add', {
+    method: 'POST',
+    body: JSON.stringify({ magnet: 'magnet:?xt=...' })
+  });
+  // Revisar network tab del navegador para endpoints reales
+
+Pros: Gratis, sin registro, anónimo.
+Cons: Sin API oficial = frágil (puede romperse si cambian la web).
+
+================================================================================
+3. OFFCLOUD.COM
+================================================================================
+Web: https://offcloud.com
+API: https://offcloud.com/api  (tiene API REST oficial)
+
+Plan gratis: 3 descargas por mes (limitado pero funcional para probar)
+Premium:     $9.99/mes
+
+Cómo funciona con el bot:
+  1. Bot envía magnet a Offcloud via API REST
+  2. Offcloud descarga a su nube
+  3. Bot recibe link directo HTTP
+  4. Bot lo manda en Discord
+
+Ejemplo API:
+  // Agregar un magnet/torrent
+  POST https://offcloud.com/api/cloud
+  Headers: { "apikey": "TU_API_KEY" }
+  Body: { "url": "magnet:?xt=urn:btih:..." }
+
+  // Respuesta incluye requestId para consultar estado
+  // Una vez completado, obtienes link directo de descarga
+
+Pros: API REST oficial y documentada, soporta magnet + torrent + HTTP + FTP.
+      Puede descargar directo a Google Drive, Dropbox, etc.
+Cons: Solo 3 descargas gratis/mes, premium algo caro.
+
+================================================================================
+4. PIKPAK (mypikpak.com)
+================================================================================
+Web:     https://mypikpak.com
+SDK Go:  https://github.com/akshardp/pikpak-go
+Otros:   Hay wrappers no oficiales en Python y JS en GitHub
+
+Plan gratis: 6-10 TB de almacenamiento cloud (!), descargas limitadas/día
+Premium:     Planes desde ~$5/mes
+
+Cómo funciona con el bot:
+  1. Bot envía magnet a PikPak via API no oficial
+  2. PikPak descarga a velocidad muy alta en su nube
+  3. Bot obtiene link directo para descargar/streamear
+  4. Bot manda link en Discord
+
+Ejemplo con Go SDK:
+  task, err := client.OfflineDownloadMagnet("magnet:?xt=urn:btih:...", "")
+  // Esperar completado...
+  // Obtener link de descarga del archivo
+
+Ejemplo buscando wrapper Python:
+  # Buscar en GitHub: "pikpak python api"
+  # Hay varios repos con wrappers no oficiales
+
+Pros: Almacenamiento ENORME gratis, velocidades muy rápidas,
+      soporta streaming directo.
+Cons: API no es oficial (puede cambiar), empresa china
+      (considerar privacidad), límite de descargas diarias en plan gratis.
+
+================================================================================
+5. MAGNET2TORRENT.COM
+================================================================================
+Web: https://magnet2torrent.com
+
+Función: Convierte magnet link → archivo .torrent descargable
+API:     No tiene API pública, pero se puede automatizar
+
+Este servicio NO genera link directo de descarga del contenido.
+Lo que hace es convertir el magnet en un archivo .torrent que luego
+puedes abrir con un cliente torrent.
+
+Integración con bot:
+  1. Bot envía magnet a magnet2torrent.com
+  2. Obtiene el archivo .torrent
+  3. Bot sube el .torrent como archivo adjunto en Discord
+  4. El usuario lo descarga y lo abre con su cliente torrent
+
+Alternativa self-hosted (Node.js):
+  // Usar la librería magnet2torrent-js
+  npm install magnet2torrent-js
+
+  const Magnet2torrent = require('magnet2torrent-js');
+  const m2t = new Magnet2torrent({ timeout: 60000 });
+  const torrent = await m2t.getTorrent('magnet:?xt=urn:btih:...');
+  fs.writeFileSync('archivo.torrent', torrent.toTorrentFile());
+  // Luego subir archivo.torrent a Discord como attachment
+
+Pros: Simple, no requiere cuenta, self-hosteable con la librería JS.
+Cons: No da link directo del contenido, solo convierte formato.
+      El usuario aún necesita un cliente torrent.
+
+================================================================================
+RESUMEN COMPARATIVO
+================================================================================
+
+Servicio       | API Oficial | Gratis        | Link Directo | Dificultad
+---------------|-------------|---------------|--------------|----------
+Seedr          | ✅ Sí       | 2 GB          | ✅ Sí        | Fácil
+TorrentSafe    | ❌ No       | Sí            | ✅ Sí        | Media
+Offcloud       | ✅ Sí       | 3 descargas   | ✅ Sí        | Fácil
+PikPak         | ⚠️ No oficial| 6-10 TB      | ✅ Sí        | Media
+Magnet2Torrent | ❌ No       | Sí            | ❌ Solo .torrent| Fácil
+
+================================================================================
+ESTRATEGIA PARA EL BOT: FALLBACK ENTRE SERVICIOS
+================================================================================
+
+La gracia de usar varios es que si uno falla, el bot prueba el siguiente.
+Pseudocódigo:
+
+  const services = [
+    { name: 'Seedr',     handler: seedrConvert },
+    { name: 'Offcloud',  handler: offcloudConvert },
+    { name: 'PikPak',    handler: pikpakConvert },
+    { name: 'Magnet2T',  handler: magnet2torrentConvert },  // fallback: .torrent
+  ];
+
+  async function convertMagnet(magnetLink) {
+    for (const service of services) {
+      try {
+        const result = await service.handler(magnetLink);
+        if (result.success) {
+          return { link: result.url, via: service.name };
+        }
+      } catch (err) {
+        console.log(`${service.name} falló, probando siguiente...`);
+      }
+    }
+    // Si todos fallan, mandar el magnet crudo como último recurso
+    return { link: magnetLink, via: 'raw' };
+  }
+
+================================================================================
