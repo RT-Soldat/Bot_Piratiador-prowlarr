@@ -55,6 +55,7 @@ class ResultDeliveryService:
         self.public_base_url = public_base_url
         self.torrent_fetch_timeout = torrent_fetch_timeout
         self.attach_torrent_file = attach_torrent_file
+        self._last_result_messages: dict[tuple[int, int], discord.Message] = {}
 
     def close(self) -> None:
         self.torrent_builder.close()
@@ -86,7 +87,7 @@ class ResultDeliveryService:
         content: str,
         view: discord.ui.View | None = None,
         file: discord.File | None = None,
-    ) -> None:
+    ) -> discord.Message:
         send_kwargs: dict[str, Any] = {"content": content}
 
         if file is not None:
@@ -95,12 +96,35 @@ class ResultDeliveryService:
         if view is not None:
             send_kwargs["view"] = view
 
-        await interaction.followup.send(**send_kwargs)
+        return await interaction.followup.send(wait=True, **send_kwargs)
+
+    async def replace_last_result_message(
+        self,
+        interaction: discord.Interaction,
+        author_id: int | None,
+        new_message: discord.Message,
+    ) -> None:
+        channel_id = interaction.channel_id
+        if channel_id is None:
+            return
+
+        owner_id = author_id or interaction.user.id
+        key = (channel_id, owner_id)
+        previous_message = self._last_result_messages.get(key)
+        self._last_result_messages[key] = new_message
+
+        if previous_message is None or previous_message.id == new_message.id:
+            return
+
+        await self.delete_message_quietly(previous_message)
 
     async def deliver_result(
         self,
         interaction: discord.Interaction,
         result: dict[str, Any],
+        *,
+        author_id: int | None = None,
+        search_message: discord.Message | None = None,
     ) -> None:
         title = get_title(result)
         filename = f"{slugify(title)}.torrent"
@@ -169,7 +193,7 @@ class ResultDeliveryService:
                     filename=filename,
                 )
 
-            await self.send_result_message(
+            sent_message = await self.send_result_message(
                 interaction=interaction,
                 content=self.build_result_content(
                     title=title,
@@ -178,10 +202,12 @@ class ResultDeliveryService:
                 view=build_links_view(magnet_http_url),
                 file=file,
             )
+            await self.replace_last_result_message(interaction, author_id, sent_message)
+            await self.delete_message_quietly(search_message)
             return
 
         if magnet_url is not None:
-            await self.send_result_message(
+            sent_message = await self.send_result_message(
                 interaction=interaction,
                 content=self.build_result_content(
                     title=title,
@@ -189,9 +215,13 @@ class ResultDeliveryService:
                 ),
                 view=build_links_view(magnet_http_url),
             )
+            await self.replace_last_result_message(interaction, author_id, sent_message)
+            await self.delete_message_quietly(search_message)
             return
 
-        await self.send_result_message(
+        sent_message = await self.send_result_message(
             interaction=interaction,
             content=f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado.",
         )
+        await self.replace_last_result_message(interaction, author_id, sent_message)
+        await self.delete_message_quietly(search_message)

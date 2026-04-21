@@ -157,7 +157,12 @@ class SearchView(discord.ui.View):
 
         result = self.results[selected_index]
         await interaction.response.defer(thinking=True)
-        await self.delivery_service.deliver_result(interaction, result)
+        await self.delivery_service.deliver_result(
+            interaction,
+            result,
+            author_id=self.author_id,
+            search_message=self.message,
+        )
 
     async def on_timeout(self) -> None:
         for child in self.children:
