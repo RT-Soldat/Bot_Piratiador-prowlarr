@@ -1,6 +1,6 @@
 # Bot de Discord para Prowlarr
 
-Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega magnet links o archivos `.torrent` como fallback. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`.
+Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega magnet links o archivos `.torrent` como fallback. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`, y sincroniza los slash commands tanto globalmente como por servidor para que aparezcan más rápido.
 
 ## Requisitos previos
 
@@ -11,7 +11,7 @@ Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Dis
 ## Setup
 
 1. Crea la aplicación y el bot en https://discord.com/developers/applications.
-2. En el bot, habilita `Message Content Intent` si quieres dejar preparado el bot para futuras extensiones. Para `/buscar` y `/piratear` no es estrictamente necesario.
+2. En el bot, habilita `Message Content Intent` si quieres que el bot también acepte mensajes de texto como `/buscar ubuntu` o `/piratear s04e01` además del slash command normal. Los slash commands por sí solos no dependen de este intent.
 3. Invita el bot al servidor con scope `bot applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files` y `Use Slash Commands`.
 4. Copia `.env.example` a `.env` y completa las variables obligatorias.
 5. Levanta el servicio:
@@ -40,6 +40,8 @@ docker compose logs -f
 
 - `/buscar <texto>`
 - `/piratear <texto>`
+
+También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/buscar ubuntu 24.04`, si `Message Content Intent` está habilitado en Discord Developer Portal.
 
 ## Troubleshooting
 

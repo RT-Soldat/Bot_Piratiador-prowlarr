@@ -35,6 +35,29 @@ def parse_positive_int(value: Any, default: int = 0) -> int:
     return parsed if parsed >= 0 else default
 
 
+def validate_query(query: str) -> str | None:
+    cleaned_query = query.strip()
+    if not cleaned_query:
+        return "La búsqueda no puede estar vacía."
+    if len(cleaned_query) > 200:
+        return "La búsqueda no puede superar los 200 caracteres."
+    return None
+
+
+def extract_text_command(content: str) -> tuple[str, str] | None:
+    stripped = content.strip()
+    if not stripped.startswith("/"):
+        return None
+
+    parts = stripped.split(None, 1)
+    command_name = parts[0].lower()
+    if command_name not in {"/buscar", "/piratear"}:
+        return None
+
+    query = parts[1] if len(parts) > 1 else ""
+    return command_name[1:], query
+
+
 def get_indexer_name(result: dict[str, Any]) -> str:
     indexer = result.get("indexer")
     if isinstance(indexer, dict):
@@ -318,7 +341,9 @@ class SearchView(discord.ui.View):
 
 class ProwlarrDiscordClient(discord.Client):
     def __init__(self, config: Config, prowlarr_client: ProwlarrClient) -> None:
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
         self.config = config
         self.prowlarr_client = prowlarr_client
         self.tree = app_commands.CommandTree(self)
@@ -326,8 +351,19 @@ class ProwlarrDiscordClient(discord.Client):
 
     async def on_ready(self) -> None:
         if not self._commands_synced:
-            synced = await self.tree.sync()
-            LOGGER.info("Se sincronizaron %s slash commands.", len(synced))
+            global_synced = await self.tree.sync()
+            LOGGER.info("Se sincronizaron %s slash commands globales.", len(global_synced))
+
+            for guild in self.guilds:
+                self.tree.copy_global_to(guild=guild)
+                guild_synced = await self.tree.sync(guild=guild)
+                LOGGER.info(
+                    "Se sincronizaron %s slash commands en el servidor %s (%s).",
+                    len(guild_synced),
+                    guild.name,
+                    guild.id,
+                )
+
             self._commands_synced = True
         LOGGER.info("Bot conectado como %s", self.user)
 
@@ -335,45 +371,49 @@ class ProwlarrDiscordClient(discord.Client):
         await self.prowlarr_client.close()
         await super().close()
 
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or not message.content:
+            return
 
-def register_commands(client: ProwlarrDiscordClient) -> None:
-    async def handle_search_command(interaction: discord.Interaction, query: str) -> None:
-        if interaction.channel_id != client.config.allowed_channel_id:
-            await interaction.response.send_message(
+        parsed_command = extract_text_command(message.content)
+        if parsed_command is None:
+            return
+
+        command_name, raw_query = parsed_command
+        LOGGER.info(
+            "Comando por texto detectado: /%s user=%s channel=%s",
+            command_name,
+            message.author.id,
+            message.channel.id,
+        )
+
+        if message.channel.id != self.config.allowed_channel_id:
+            await message.reply(
                 "Este comando solo funciona en el canal designado.",
-                ephemeral=True,
+                mention_author=False,
             )
             return
 
-        cleaned_query = query.strip()
-        if not cleaned_query:
-            await interaction.response.send_message(
-                "La búsqueda no puede estar vacía.",
-                ephemeral=True,
-            )
+        validation_error = validate_query(raw_query)
+        if validation_error:
+            await message.reply(validation_error, mention_author=False)
             return
 
-        if len(cleaned_query) > 200:
-            await interaction.response.send_message(
-                "La búsqueda no puede superar los 200 caracteres.",
-                ephemeral=True,
-            )
-            return
+        cleaned_query = raw_query.strip()
 
-        await interaction.response.defer(thinking=True)
-
-        try:
-            results = await client.prowlarr_client.search(cleaned_query)
-        except Exception:
-            LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
-            await interaction.followup.send(
-                "Error consultando Prowlarr. Revisá los logs del bot.",
-                ephemeral=True,
-            )
-            return
+        async with message.channel.typing():
+            try:
+                results = await self.prowlarr_client.search(cleaned_query)
+            except Exception:
+                LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
+                await message.reply(
+                    "Error consultando Prowlarr. Revisá los logs del bot.",
+                    mention_author=False,
+                )
+                return
 
         if not results:
-            await interaction.followup.send(f"No se encontraron resultados para: {cleaned_query}")
+            await message.channel.send(f"No se encontraron resultados para: {cleaned_query}")
             return
 
         sorted_results = sorted(
@@ -385,25 +425,84 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         view = SearchView(
             results=sorted_results,
             query=cleaned_query,
-            prowlarr_client=client.prowlarr_client,
-            author_id=interaction.user.id,
+            prowlarr_client=self.prowlarr_client,
+            author_id=message.author.id,
         )
-        message = await interaction.followup.send(
-            embed=view.build_embed(),
-            view=view,
-            wait=True,
-        )
-        view.message = message
+        sent_message = await message.channel.send(embed=view.build_embed(), view=view)
+        view.message = sent_message
 
+
+async def execute_search(
+    interaction: discord.Interaction,
+    client: ProwlarrDiscordClient,
+    query: str,
+) -> None:
+    LOGGER.info(
+        "Slash command ejecutado: user=%s channel=%s query=%r",
+        interaction.user.id,
+        interaction.channel_id,
+        query,
+    )
+
+    if interaction.channel_id != client.config.allowed_channel_id:
+        await interaction.response.send_message(
+            "Este comando solo funciona en el canal designado.",
+            ephemeral=True,
+        )
+        return
+
+    validation_error = validate_query(query)
+    if validation_error:
+        await interaction.response.send_message(validation_error, ephemeral=True)
+        return
+
+    cleaned_query = query.strip()
+    await interaction.response.defer(thinking=True)
+
+    try:
+        results = await client.prowlarr_client.search(cleaned_query)
+    except Exception:
+        LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
+        await interaction.followup.send(
+            "Error consultando Prowlarr. Revisá los logs del bot.",
+            ephemeral=True,
+        )
+        return
+
+    if not results:
+        await interaction.followup.send(f"No se encontraron resultados para: {cleaned_query}")
+        return
+
+    sorted_results = sorted(
+        results,
+        key=lambda result: parse_positive_int(result.get("seeders")),
+        reverse=True,
+    )
+
+    view = SearchView(
+        results=sorted_results,
+        query=cleaned_query,
+        prowlarr_client=client.prowlarr_client,
+        author_id=interaction.user.id,
+    )
+    message = await interaction.followup.send(
+        embed=view.build_embed(),
+        view=view,
+        wait=True,
+    )
+    view.message = message
+
+
+def register_commands(client: ProwlarrDiscordClient) -> None:
     @client.tree.command(name="buscar", description="Busca torrents usando Prowlarr")
     @app_commands.describe(query="Texto a buscar")
     async def buscar(interaction: discord.Interaction, query: str) -> None:
-        await handle_search_command(interaction, query)
+        await execute_search(interaction, client, query)
 
     @client.tree.command(name="piratear", description="Alias de /buscar para buscar torrents")
     @app_commands.describe(query="Texto a buscar")
     async def piratear(interaction: discord.Interaction, query: str) -> None:
-        await handle_search_command(interaction, query)
+        await execute_search(interaction, client, query)
 
 
 async def async_main() -> None:
