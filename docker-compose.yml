@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "9987:9987"
+      - "127.0.0.1:19987:9987"
       - "6881:6881/tcp"
       - "6881:6881/udp"
     networks:

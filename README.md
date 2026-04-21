@@ -69,10 +69,18 @@ adjunta el `.torrent` cuando lo tenga disponible.
 El bot expone además:
 
 ```bash
-curl http://localhost:9987/health
+curl http://127.0.0.1:19987/health
 ```
 
-para verificar que el servidor HTTP embebido está arriba.
+para verificar que el servidor HTTP embebido está arriba cuando Docker se publica solo en loopback.
+
+## Nginx
+
+Si quieres mantener la URL pública en `http://errete.ddns.net:9987`, una configuración práctica es:
+
+- publicar el contenedor en `127.0.0.1:19987:9987`
+- dejar `BOT_PUBLIC_BASE_URL=http://errete.ddns.net:9987`
+- hacer proxy con `nginx` desde `:9987` hacia `http://127.0.0.1:19987`
 
 ## Troubleshooting
 
@@ -96,8 +104,8 @@ para verificar que el servidor HTTP embebido está arriba.
 ### Los botones no funcionan
 
 - Confirma que `BOT_PUBLIC_BASE_URL` apunte al host correcto y no termine con `/`.
-- Verifica que el puerto `9987` esté publicado en Docker, permitido en firewall y accesible desde afuera.
-- Comprueba el endpoint `http://<tu-host>:9987/health`.
+- Si usas `nginx`, verifica primero el backend local con `http://127.0.0.1:19987/health`.
+- Comprueba también el endpoint público `http://<tu-host>:9987/health`.
 
 ### El comando responde fuera del canal esperado
 
