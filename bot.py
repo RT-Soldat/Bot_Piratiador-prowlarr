@@ -339,10 +339,19 @@ class SearchView(discord.ui.View):
 
         download_url = get_download_url(result)
         if download_url:
-            torrent_bytes = await self.prowlarr_client.download_torrent(download_url)
-            if torrent_bytes is not None:
+            download_resource = await self.prowlarr_client.download_resource(download_url)
+            if download_resource is not None and download_resource.magnet_url:
+                await interaction.followup.send(
+                    f"🧲 **{title}**\n{download_resource.magnet_url}"
+                )
+                return
+
+            if download_resource is not None and download_resource.torrent_bytes is not None:
                 filename = f"{slugify(title)}.torrent"
-                file = discord.File(fp=BytesIO(torrent_bytes), filename=filename)
+                file = discord.File(
+                    fp=BytesIO(download_resource.torrent_bytes),
+                    filename=filename,
+                )
                 await interaction.followup.send(
                     content=(
                         f"📎 **{title}**\n"
