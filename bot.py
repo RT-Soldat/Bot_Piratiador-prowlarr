@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from math import ceil
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import discord
 import httpx
@@ -98,6 +99,7 @@ class Config:
     prowlarr_url: str
     prowlarr_api_key: str
     prowlarr_timeout: float = 90.0
+    attach_torrent_file: bool = False
     log_level: str = "INFO"
 
 
@@ -147,6 +149,8 @@ def load_config() -> Config:
         LOGGER.error("PROWLARR_TIMEOUT debe ser mayor que 0.")
         raise SystemExit(1)
 
+    attach_torrent_file = parse_bool_env("ATTACH_TORRENT_FILE", False)
+
     if missing:
         LOGGER.error("Faltan variables de entorno obligatorias: %s", ", ".join(missing))
         raise SystemExit(1)
@@ -157,8 +161,24 @@ def load_config() -> Config:
         prowlarr_url=prowlarr_url.rstrip("/"),
         prowlarr_api_key=prowlarr_api_key,
         prowlarr_timeout=prowlarr_timeout,
+        attach_torrent_file=attach_torrent_file,
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )
+
+
+def parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+
+    LOGGER.error("%s debe ser true/false, yes/no, on/off o 1/0.", name)
+    raise SystemExit(1)
 
 
 def format_timeout_seconds(seconds: float) -> str:
@@ -175,6 +195,52 @@ def get_search_error_message(exc: Exception, timeout_seconds: float) -> str:
             "Probá de nuevo o aumentá PROWLARR_TIMEOUT en el .env."
         )
     return "Error consultando Prowlarr. Revisá los logs del bot."
+
+
+def extract_info_hash_from_magnet(magnet_url: str) -> str | None:
+    parsed = urlparse(magnet_url)
+    if parsed.scheme != "magnet":
+        return None
+
+    xt_values = parse_qs(parsed.query).get("xt", [])
+    for xt_value in xt_values:
+        prefix = "urn:btih:"
+        if xt_value.lower().startswith(prefix):
+            return xt_value[len(prefix) :].strip() or None
+    return None
+
+
+def build_compact_magnet_url(
+    result: dict[str, Any],
+    title: str,
+    fallback_magnet_url: str | None = None,
+) -> str | None:
+    info_hash = get_info_hash(result)
+    if info_hash is None and fallback_magnet_url:
+        info_hash = extract_info_hash_from_magnet(fallback_magnet_url)
+
+    if info_hash:
+        return build_magnet(info_hash, truncate(title, 80), PUBLIC_TRACKERS)
+
+    if fallback_magnet_url:
+        return fallback_magnet_url
+
+    return None
+
+
+def build_magnet_button_view(magnet_url: str) -> discord.ui.View | None:
+    if len(magnet_url) > 512:
+        return None
+
+    view = discord.ui.View(timeout=None)
+    view.add_item(
+        discord.ui.Button(
+            label="Abrir magnet",
+            style=discord.ButtonStyle.link,
+            url=magnet_url,
+        )
+    )
+    return view
 
 
 class SearchSelect(discord.ui.Select):
@@ -206,6 +272,7 @@ class SearchView(discord.ui.View):
         self.query = query
         self.prowlarr_client = prowlarr_client
         self.author_id = author_id
+        self.attach_torrent_file = False
         self.current_page = 0
         self.message: discord.Message | None = None
 
@@ -325,45 +392,89 @@ class SearchView(discord.ui.View):
         result: dict[str, Any],
     ) -> None:
         title = get_title(result)
-
-        magnet_url = get_magnet_url(result)
-        if magnet_url:
-            await interaction.followup.send(f"🧲 **{title}**\n{magnet_url}")
-            return
-
-        info_hash = get_info_hash(result)
-        if info_hash:
-            magnet = build_magnet(info_hash, title, PUBLIC_TRACKERS)
-            await interaction.followup.send(f"🧲 **{title}**\n{magnet}")
-            return
-
         download_url = get_download_url(result)
-        if download_url:
-            download_resource = await self.prowlarr_client.download_resource(download_url)
-            if download_resource is not None and download_resource.magnet_url:
-                await interaction.followup.send(
-                    f"🧲 **{title}**\n{download_resource.magnet_url}"
-                )
-                return
+        original_magnet_url = get_magnet_url(result)
+        magnet_url = build_compact_magnet_url(result, title, original_magnet_url)
+        download_resource = None
 
-            if download_resource is not None and download_resource.torrent_bytes is not None:
-                filename = f"{slugify(title)}.torrent"
-                file = discord.File(
-                    fp=BytesIO(download_resource.torrent_bytes),
-                    filename=filename,
-                )
-                await interaction.followup.send(
-                    content=(
-                        f"📎 **{title}**\n"
-                        "No hay magnet disponible. Adjunto el archivo .torrent:"
-                    ),
-                    file=file,
-                )
-                return
-
-        await interaction.followup.send(
-            f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado."
+        should_fetch_download = download_url is not None and (
+            self.attach_torrent_file or magnet_url is None
         )
+        if should_fetch_download:
+            download_resource = await self.prowlarr_client.download_resource(download_url)
+
+        if magnet_url is None and download_resource is not None and download_resource.magnet_url:
+            magnet_url = build_compact_magnet_url(
+                result,
+                title,
+                download_resource.magnet_url,
+            )
+
+        torrent_bytes = (
+            download_resource.torrent_bytes
+            if download_resource is not None and download_resource.torrent_bytes is not None
+            else None
+        )
+
+        if magnet_url is not None:
+            lines = [f"🧲 **{title}**", f"<{magnet_url}>"]
+            if self.attach_torrent_file and torrent_bytes is not None:
+                lines.append("📎 Archivo .torrent adjunto.")
+
+            file = None
+            if self.attach_torrent_file and torrent_bytes is not None:
+                file = discord.File(
+                    fp=BytesIO(torrent_bytes),
+                    filename=f"{slugify(title)}.torrent",
+                )
+
+            await self.send_result_message(
+                interaction=interaction,
+                content="\n".join(lines),
+                magnet_url=magnet_url,
+                file=file,
+            )
+            return
+
+        if torrent_bytes is not None:
+            file = discord.File(
+                fp=BytesIO(torrent_bytes),
+                filename=f"{slugify(title)}.torrent",
+            )
+            await self.send_result_message(
+                interaction=interaction,
+                content=(
+                    f"📎 **{title}**\n"
+                    "No hay magnet disponible. Adjunto el archivo .torrent:"
+                ),
+                file=file,
+            )
+            return
+
+        await self.send_result_message(
+            interaction=interaction,
+            content=f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado.",
+        )
+
+    async def send_result_message(
+        self,
+        interaction: discord.Interaction,
+        content: str,
+        magnet_url: str | None = None,
+        file: discord.File | None = None,
+    ) -> None:
+        view = build_magnet_button_view(magnet_url) if magnet_url else None
+
+        if view is not None:
+            try:
+                await interaction.followup.send(content=content, file=file, view=view)
+                return
+            except discord.HTTPException:
+                LOGGER.warning("Discord rechazó el botón de magnet. Reintentando sin botón.")
+                if file is not None:
+                    file.reset(seek=True)
+
+        await interaction.followup.send(content=content, file=file)
 
     async def on_timeout(self) -> None:
         for child in self.children:
@@ -467,6 +578,7 @@ class ProwlarrDiscordClient(discord.Client):
             prowlarr_client=self.prowlarr_client,
             author_id=message.author.id,
         )
+        view.attach_torrent_file = self.config.attach_torrent_file
         sent_message = await message.channel.send(embed=view.build_embed(), view=view)
         view.message = sent_message
 
@@ -524,6 +636,7 @@ async def execute_search(
         prowlarr_client=client.prowlarr_client,
         author_id=interaction.user.id,
     )
+    view.attach_torrent_file = client.config.attach_torrent_file
     message = await interaction.followup.send(
         embed=view.build_embed(),
         view=view,

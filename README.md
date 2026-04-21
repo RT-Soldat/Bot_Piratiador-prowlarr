@@ -35,6 +35,7 @@ docker compose logs -f
 | `PROWLARR_URL` | Si | URL base de Prowlarr, por ejemplo `http://prowlarr:9696` |
 | `PROWLARR_API_KEY` | Si | API key copiada desde Prowlarr |
 | `PROWLARR_TIMEOUT` | No | Timeout de consultas a Prowlarr en segundos, por defecto `90` |
+| `ATTACH_TORRENT_FILE` | No | Si vale `true`, intenta adjuntar también el archivo `.torrent` junto al magnet cuando esté disponible |
 | `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
 
 ## Comandos disponibles
@@ -43,6 +44,23 @@ docker compose logs -f
 - `/piratear <texto>`
 
 También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/buscar ubuntu 24.04`, si `Message Content Intent` está habilitado en Discord Developer Portal.
+
+## Entrega de resultados
+
+Por defecto, al seleccionar un resultado el bot entrega el magnet.
+
+- Si el resultado trae `magnetUrl`, el bot lo usa.
+- Si no hay `magnetUrl` pero sí `infoHash`, el bot construye un magnet compacto con trackers públicos.
+- Si el `downloadUrl` de Prowlarr redirige a `magnet:`, el bot aprovecha ese magnet en vez de marcar error.
+- El mensaje intenta incluir un botón `Abrir magnet` además del magnet en texto plano.
+
+Si en el `.env` configuras:
+
+```env
+ATTACH_TORRENT_FILE=true
+```
+
+el bot intentará adjuntar también el archivo `.torrent` en el mismo mensaje cuando Prowlarr pueda descargarlo. Si el tracker solo redirige a un magnet y no entrega `.torrent`, el bot enviará únicamente el magnet.
 
 ## Troubleshooting
 
@@ -57,6 +75,7 @@ También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/b
 - Verifica que `PROWLARR_URL` sea `http://prowlarr:9696` si ambos contenedores comparten la red `jellyfinarr-stack_default`.
 - Comprueba que `PROWLARR_API_KEY` sea valida.
 - Si Prowlarr tarda demasiado en responder, aumenta `PROWLARR_TIMEOUT` en el `.env`, por ejemplo a `120`.
+- Si quieres recibir también el archivo `.torrent`, activa `ATTACH_TORRENT_FILE=true` en el `.env`.
 - Asegurate de que la red externa exista en el host y de que el contenedor `prowlarr` este conectado a ella.
 
 ### El bot no puede enviar archivos
