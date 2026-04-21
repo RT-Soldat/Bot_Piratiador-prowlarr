@@ -1,6 +1,6 @@
 # Bot de Discord para Prowlarr
 
-Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Discord, consulta una instancia existente de Prowlarr y entrega resultados mediante links HTTP clickeables, redirecciones a magnet y archivos `.torrent`. Está pensado para correr en Docker dentro de la misma red que el contenedor `prowlarr`, y sincroniza los slash commands tanto globalmente como por servidor para que aparezcan más rápido.
+Bot ligero en Python 3.12 que expone `/buscar` y `/piratear` en Discord, consulta Prowlarr y entrega torrents como `.torrent` adjunto y/o botón `Abrir magnet`. Está pensado para correr en Docker en la misma red que `prowlarr`.
 
 ## Requisitos previos
 
@@ -13,17 +13,17 @@ Bot ligero en Python 3.12 que expone los comandos `/buscar` y `/piratear` en Dis
 1. Crea la aplicación y el bot en https://discord.com/developers/applications.
 2. En el bot, habilita `Message Content Intent` si quieres que el bot también acepte mensajes de texto como `/buscar ubuntu` o `/piratear s04e01` además del slash command normal. Los slash commands por sí solos no dependen de este intent.
 3. Invita el bot al servidor con scope `bot applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files` y `Use Slash Commands`.
-4. Copia `.env.example` a `.env` y completa las variables obligatorias. Si quieres botones clickeables en Discord, configura también `BOT_PUBLIC_BASE_URL` con una URL alcanzable desde afuera.
+4. Copia `.env.example` a `.env` y completa las variables obligatorias. Si quieres el botón de magnet, configura `BOT_PUBLIC_BASE_URL`. Si quieres adjuntar el `.torrent`, activa `ATTACH_TORRENT_FILE=true`.
 5. Levanta el servicio:
 
 ```bash
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 6. Revisa los logs:
 
 ```bash
-docker compose logs -f
+docker-compose logs -f
 ```
 
 ## Variables de entorno
@@ -52,22 +52,19 @@ También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/b
 
 ## Entrega de resultados
 
-Al seleccionar un resultado, el bot intenta resolver la mejor salida disponible:
+Al seleccionar un resultado, el bot intenta:
 
-- Si Prowlarr devuelve un `.torrent`, lo usa directamente.
-- Si el indexer solo ofrece magnet, el bot intenta obtener metadata vía DHT usando `libtorrent`.
-- Si `BOT_PUBLIC_BASE_URL` está configurado, publica botones HTTP clickeables:
-  - `Descargar .torrent` apunta a `/t/<id>`
-  - `Abrir magnet` apunta a `/m/<id>` y redirige a `magnet:?`
-- Si no hay URL pública, el bot cae a adjuntos o al magnet en texto plano.
+- usar el `.torrent` directo si Prowlarr lo devuelve
+- generar el `.torrent` vía DHT si solo existe magnet
+- publicar un botón `Abrir magnet` usando `/m/<id>` si `BOT_PUBLIC_BASE_URL` está configurado
 
-Si además configuras:
+Si configuras:
 
 ```env
 ATTACH_TORRENT_FILE=true
 ```
 
-el bot adjuntará también el archivo `.torrent` cuando lo tenga disponible, incluso si tuvo que generarlo localmente desde el magnet.
+adjunta el `.torrent` cuando lo tenga disponible.
 
 El bot expone además:
 
@@ -83,14 +80,13 @@ para verificar que el servidor HTTP embebido está arriba.
 
 - Espera unos segundos tras iniciar el bot.
 - Confirma que el bot tenga el scope `applications.commands`.
-- Revisa `docker compose logs -f` para verificar que el `tree.sync()` se haya ejecutado sin errores.
+- Revisa `docker-compose logs -f` para verificar que el `tree.sync()` se haya ejecutado sin errores.
 
 ### Falla la conexion a Prowlarr
 
 - Verifica que `PROWLARR_URL` sea `http://prowlarr:9696` si ambos contenedores comparten la red `jellyfinarr-stack_default`.
 - Comprueba que `PROWLARR_API_KEY` sea valida.
 - Si Prowlarr tarda demasiado en responder, aumenta `PROWLARR_TIMEOUT` en el `.env`, por ejemplo a `120`.
-- Si quieres recibir también el archivo `.torrent`, activa `ATTACH_TORRENT_FILE=true` en el `.env`.
 - Asegurate de que la red externa exista en el host y de que el contenedor `prowlarr` este conectado a ella.
 
 ### El bot no puede enviar archivos
@@ -100,8 +96,7 @@ para verificar que el servidor HTTP embebido está arriba.
 ### Los botones no funcionan
 
 - Confirma que `BOT_PUBLIC_BASE_URL` apunte al host correcto y no termine con `/`.
-- Verifica que el puerto `9987` esté publicado en Docker y accesible desde afuera.
-- Si el `.torrent` tarda mucho en generarse para magnets viejos o con poco swarm, prueba subiendo `TORRENT_FETCH_TIMEOUT`.
+- Verifica que el puerto `9987` esté publicado en Docker, permitido en firewall y accesible desde afuera.
 - Comprueba el endpoint `http://<tu-host>:9987/health`.
 
 ### El comando responde fuera del canal esperado

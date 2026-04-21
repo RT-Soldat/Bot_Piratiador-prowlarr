@@ -23,29 +23,19 @@ LOGGER = logging.getLogger("discord_prowlarr_bot")
 
 
 def build_links_view(
-    torrent_http_url: str | None = None,
     magnet_http_url: str | None = None,
 ) -> discord.ui.View | None:
-    if not torrent_http_url and not magnet_http_url:
+    if magnet_http_url is None:
         return None
 
     view = discord.ui.View(timeout=None)
-    if torrent_http_url:
-        view.add_item(
-            discord.ui.Button(
-                label="Descargar .torrent",
-                style=discord.ButtonStyle.link,
-                url=torrent_http_url,
-            )
+    view.add_item(
+        discord.ui.Button(
+            label="Abrir magnet",
+            style=discord.ButtonStyle.link,
+            url=magnet_http_url,
         )
-    if magnet_http_url:
-        view.add_item(
-            discord.ui.Button(
-                label="Abrir magnet",
-                style=discord.ButtonStyle.link,
-                url=magnet_http_url,
-            )
-        )
+    )
     return view
 
 
@@ -72,24 +62,12 @@ class ResultDeliveryService:
     def build_result_content(
         self,
         title: str,
-        torrent_attached: bool,
-        torrent_http_url: str | None,
-        magnet_http_url: str | None,
         raw_magnet_url: str | None,
     ) -> str:
         lines = [f"🧲 **{title}**"]
 
-        if torrent_http_url and magnet_http_url:
-            lines.append("Usá los botones para descargar el .torrent o abrir el magnet.")
-        elif torrent_http_url:
-            lines.append("Usá el botón para descargar el .torrent.")
-        elif magnet_http_url:
-            lines.append("No se pudo generar el .torrent a tiempo, pero dejé el botón para abrir el magnet.")
-        elif raw_magnet_url:
+        if raw_magnet_url:
             lines.append("<" + raw_magnet_url + ">")
-
-        if torrent_attached:
-            lines.append("📎 Archivo .torrent adjunto.")
 
         return "\n".join(lines)
 
@@ -131,10 +109,9 @@ class ResultDeliveryService:
         magnet_url = build_compact_magnet_url(result, title, original_magnet_url)
         download_resource = None
         progress_message: discord.Message | None = None
-        torrent_http_url: str | None = None
         magnet_http_url: str | None = None
 
-        should_resolve_torrent = self.attach_torrent_file or bool(self.public_base_url)
+        should_resolve_torrent = self.attach_torrent_file
         should_fetch_download = download_url is not None and (
             should_resolve_torrent or magnet_url is None
         )
@@ -175,16 +152,13 @@ class ResultDeliveryService:
             finally:
                 await self.delete_message_quietly(progress_message)
 
-        if self.public_base_url and (torrent_bytes is not None or magnet_url is not None):
+        if self.public_base_url and magnet_url is not None:
             entry_id = await self.registry.register(
                 torrent_bytes=torrent_bytes,
                 magnet_url=magnet_url,
                 filename=filename,
             )
-            if torrent_bytes is not None:
-                torrent_http_url = f"{self.public_base_url}/t/{entry_id}"
-            if magnet_url is not None:
-                magnet_http_url = f"{self.public_base_url}/m/{entry_id}"
+            magnet_http_url = f"{self.public_base_url}/m/{entry_id}"
 
         if torrent_bytes is not None:
             should_attach_file = self.attach_torrent_file or magnet_url is None
@@ -199,12 +173,9 @@ class ResultDeliveryService:
                 interaction=interaction,
                 content=self.build_result_content(
                     title=title,
-                    torrent_attached=file is not None,
-                    torrent_http_url=torrent_http_url,
-                    magnet_http_url=magnet_http_url,
-                    raw_magnet_url=None if (torrent_http_url or magnet_http_url) else magnet_url,
+                    raw_magnet_url=None if magnet_http_url else magnet_url,
                 ),
-                view=build_links_view(torrent_http_url, magnet_http_url),
+                view=build_links_view(magnet_http_url),
                 file=file,
             )
             return
@@ -214,12 +185,9 @@ class ResultDeliveryService:
                 interaction=interaction,
                 content=self.build_result_content(
                     title=title,
-                    torrent_attached=False,
-                    torrent_http_url=torrent_http_url,
-                    magnet_http_url=magnet_http_url,
-                    raw_magnet_url=None if (torrent_http_url or magnet_http_url) else magnet_url,
+                    raw_magnet_url=None if magnet_http_url else magnet_url,
                 ),
-                view=build_links_view(torrent_http_url, magnet_http_url),
+                view=build_links_view(magnet_http_url),
             )
             return
 
