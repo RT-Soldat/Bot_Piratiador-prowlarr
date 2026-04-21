@@ -9,6 +9,7 @@ from math import ceil
 from typing import Any
 
 import discord
+import httpx
 from discord import app_commands
 from dotenv import load_dotenv
 
@@ -96,6 +97,7 @@ class Config:
     allowed_channel_id: int
     prowlarr_url: str
     prowlarr_api_key: str
+    prowlarr_timeout: float = 90.0
     log_level: str = "INFO"
 
 
@@ -134,6 +136,17 @@ def load_config() -> Config:
     if not prowlarr_api_key:
         missing.append("PROWLARR_API_KEY")
 
+    timeout_raw = os.getenv("PROWLARR_TIMEOUT", "90").strip()
+    try:
+        prowlarr_timeout = float(timeout_raw)
+    except ValueError:
+        LOGGER.error("PROWLARR_TIMEOUT debe ser un numero valido.")
+        raise SystemExit(1) from None
+
+    if prowlarr_timeout <= 0:
+        LOGGER.error("PROWLARR_TIMEOUT debe ser mayor que 0.")
+        raise SystemExit(1)
+
     if missing:
         LOGGER.error("Faltan variables de entorno obligatorias: %s", ", ".join(missing))
         raise SystemExit(1)
@@ -143,8 +156,25 @@ def load_config() -> Config:
         allowed_channel_id=allowed_channel_id,
         prowlarr_url=prowlarr_url.rstrip("/"),
         prowlarr_api_key=prowlarr_api_key,
+        prowlarr_timeout=prowlarr_timeout,
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )
+
+
+def format_timeout_seconds(seconds: float) -> str:
+    if seconds.is_integer():
+        return str(int(seconds))
+    return f"{seconds:g}"
+
+
+def get_search_error_message(exc: Exception, timeout_seconds: float) -> str:
+    if isinstance(exc, httpx.TimeoutException):
+        formatted = format_timeout_seconds(timeout_seconds)
+        return (
+            f"Prowlarr tardó más de {formatted}s en responder. "
+            "Probá de nuevo o aumentá PROWLARR_TIMEOUT en el .env."
+        )
+    return "Error consultando Prowlarr. Revisá los logs del bot."
 
 
 class SearchSelect(discord.ui.Select):
@@ -404,10 +434,10 @@ class ProwlarrDiscordClient(discord.Client):
         async with message.channel.typing():
             try:
                 results = await self.prowlarr_client.search(cleaned_query)
-            except Exception:
+            except Exception as exc:
                 LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
                 await message.reply(
-                    "Error consultando Prowlarr. Revisá los logs del bot.",
+                    get_search_error_message(exc, self.config.prowlarr_timeout),
                     mention_author=False,
                 )
                 return
@@ -461,10 +491,10 @@ async def execute_search(
 
     try:
         results = await client.prowlarr_client.search(cleaned_query)
-    except Exception:
+    except Exception as exc:
         LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
         await interaction.followup.send(
-            "Error consultando Prowlarr. Revisá los logs del bot.",
+            get_search_error_message(exc, client.config.prowlarr_timeout),
             ephemeral=True,
         )
         return
@@ -513,7 +543,7 @@ async def async_main() -> None:
     prowlarr_client = ProwlarrClient(
         base_url=config.prowlarr_url,
         api_key=config.prowlarr_api_key,
-        timeout=30.0,
+        timeout=config.prowlarr_timeout,
     )
     client = ProwlarrDiscordClient(config=config, prowlarr_client=prowlarr_client)
     register_commands(client)

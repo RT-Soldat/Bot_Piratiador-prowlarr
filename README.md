@@ -34,6 +34,7 @@ docker compose logs -f
 | `ALLOWED_CHANNEL_ID` | Si | ID del canal donde se permiten `/buscar` y `/piratear` |
 | `PROWLARR_URL` | Si | URL base de Prowlarr, por ejemplo `http://prowlarr:9696` |
 | `PROWLARR_API_KEY` | Si | API key copiada desde Prowlarr |
+| `PROWLARR_TIMEOUT` | No | Timeout de consultas a Prowlarr en segundos, por defecto `90` |
 | `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
 
 ## Comandos disponibles
@@ -55,6 +56,7 @@ También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/b
 
 - Verifica que `PROWLARR_URL` sea `http://prowlarr:9696` si ambos contenedores comparten la red `jellyfinarr-stack_default`.
 - Comprueba que `PROWLARR_API_KEY` sea valida.
+- Si Prowlarr tarda demasiado en responder, aumenta `PROWLARR_TIMEOUT` en el `.env`, por ejemplo a `120`.
 - Asegurate de que la red externa exista en el host y de que el contenedor `prowlarr` este conectado a ella.
 
 ### El bot no puede enviar archivos

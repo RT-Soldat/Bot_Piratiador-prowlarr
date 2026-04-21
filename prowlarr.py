@@ -7,12 +7,12 @@ import httpx
 
 
 class ProwlarrClient:
-    def __init__(self, base_url: str, api_key: str, timeout: float = 30.0) -> None:
+    def __init__(self, base_url: str, api_key: str, timeout: float = 90.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self._client = httpx.AsyncClient(
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, connect=min(timeout, 10.0)),
             follow_redirects=True,
             headers={"X-Api-Key": api_key},
         )
