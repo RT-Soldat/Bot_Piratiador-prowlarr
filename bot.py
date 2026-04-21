@@ -464,17 +464,24 @@ class SearchView(discord.ui.View):
         file: discord.File | None = None,
     ) -> None:
         view = build_magnet_button_view(magnet_url) if magnet_url else None
+        send_kwargs: dict[str, Any] = {"content": content}
+
+        if file is not None:
+            send_kwargs["file"] = file
 
         if view is not None:
             try:
-                await interaction.followup.send(content=content, file=file, view=view)
+                await interaction.followup.send(view=view, **send_kwargs)
                 return
-            except discord.HTTPException:
-                LOGGER.warning("Discord rechazó el botón de magnet. Reintentando sin botón.")
+            except Exception as exc:
+                LOGGER.warning(
+                    "Discord rechazó el envío con botón de magnet (%s). Reintentando sin botón.",
+                    type(exc).__name__,
+                )
                 if file is not None:
                     file.reset(seek=True)
 
-        await interaction.followup.send(content=content, file=file)
+        await interaction.followup.send(**send_kwargs)
 
     async def on_timeout(self) -> None:
         for child in self.children:
