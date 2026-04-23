@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlparse
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
@@ -22,11 +23,15 @@ class Config:
     libtorrent_listen_port: int = 6881
     attach_torrent_file: bool = False
     log_level: str = "INFO"
+    registry_ttl_seconds: int = 60 * 60 * 24 * 7
+    registry_purge_interval_seconds: int = 300
+    registry_data_dir: Path = Path("/app/data/registry")
+    rate_limit_calls: int = 5
+    rate_limit_window_seconds: int = 60
 
 
-def configure_logging() -> None:
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+def configure_logging(config: Config) -> None:
+    level = getattr(logging, config.log_level, logging.INFO)
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -85,6 +90,28 @@ def load_config() -> Config:
 
     attach_torrent_file = parse_bool_env("ATTACH_TORRENT_FILE", False)
 
+    registry_ttl_seconds = parse_int_env("REGISTRY_TTL_SECONDS", 60 * 60 * 24 * 7)
+    if registry_ttl_seconds <= 0:
+        LOGGER.error("REGISTRY_TTL_SECONDS debe ser mayor que 0.")
+        raise SystemExit(1)
+
+    registry_purge_interval_seconds = parse_int_env("REGISTRY_PURGE_INTERVAL_SECONDS", 300)
+    if registry_purge_interval_seconds <= 0:
+        LOGGER.error("REGISTRY_PURGE_INTERVAL_SECONDS debe ser mayor que 0.")
+        raise SystemExit(1)
+
+    registry_data_dir = Path(os.getenv("REGISTRY_DATA_DIR", "/app/data/registry").strip() or "/app/data/registry")
+
+    rate_limit_calls = parse_int_env("RATE_LIMIT_CALLS", 5)
+    if rate_limit_calls <= 0:
+        LOGGER.error("RATE_LIMIT_CALLS debe ser mayor que 0.")
+        raise SystemExit(1)
+
+    rate_limit_window_seconds = parse_int_env("RATE_LIMIT_WINDOW_SECONDS", 60)
+    if rate_limit_window_seconds <= 0:
+        LOGGER.error("RATE_LIMIT_WINDOW_SECONDS debe ser mayor que 0.")
+        raise SystemExit(1)
+
     if missing:
         LOGGER.error("Faltan variables de entorno obligatorias: %s", ", ".join(missing))
         raise SystemExit(1)
@@ -102,6 +129,11 @@ def load_config() -> Config:
         libtorrent_listen_port=libtorrent_listen_port,
         attach_torrent_file=attach_torrent_file,
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        registry_ttl_seconds=registry_ttl_seconds,
+        registry_purge_interval_seconds=registry_purge_interval_seconds,
+        registry_data_dir=registry_data_dir,
+        rate_limit_calls=rate_limit_calls,
+        rate_limit_window_seconds=rate_limit_window_seconds,
     )
 
 

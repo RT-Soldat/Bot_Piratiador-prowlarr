@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
+
+LOGGER = logging.getLogger("discord_prowlarr_bot.prowlarr")
 
 
 @dataclass(slots=True)
@@ -24,10 +27,18 @@ class ProwlarrClient:
             headers={"X-Api-Key": api_key},
         )
 
-    async def search(self, query: str) -> list[dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        categories: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[tuple[str, str]] = [("query", query), ("type", "search")]
+        if categories:
+            params.extend(("categories", str(cat)) for cat in categories)
+
         response = await self._client.get(
             f"{self.base_url}/api/v1/search",
-            params={"query": query, "type": "search"},
+            params=params,
         )
         response.raise_for_status()
 
@@ -37,6 +48,13 @@ class ProwlarrClient:
         if payload is None:
             return []
         raise ValueError("La respuesta de Prowlarr no es una lista de resultados.")
+
+    async def ping(self) -> bool:
+        try:
+            response = await self._client.get(f"{self.base_url}/api/v1/system/status")
+        except httpx.HTTPError:
+            return False
+        return response.status_code == httpx.codes.OK
 
     def _resolve_url(self, url: str) -> str:
         return urljoin(f"{self.base_url}/", url)
@@ -83,7 +101,8 @@ class ProwlarrClient:
                     next_url,
                     redirects_remaining=redirects_remaining - 1,
                 )
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            LOGGER.warning("Fallo fetch de %s: %s", url, exc)
             return None
 
         return None

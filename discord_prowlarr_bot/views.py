@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from math import ceil
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import discord
 
@@ -16,6 +16,16 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 RESULTS_PER_PAGE = 10
 
+SortKey = Literal["seeders", "size", "publishDate"]
+
+
+def _sort_results(results: list[dict[str, Any]], sort_key: SortKey) -> list[dict[str, Any]]:
+    if sort_key == "seeders":
+        return sorted(results, key=lambda r: parse_positive_int(r.get("seeders")), reverse=True)
+    if sort_key == "size":
+        return sorted(results, key=lambda r: parse_positive_int(r.get("size")), reverse=True)
+    return sorted(results, key=lambda r: str(r.get("publishDate") or ""), reverse=True)
+
 
 class SearchSelect(discord.ui.Select):
     def __init__(self, view: "SearchView") -> None:
@@ -25,7 +35,7 @@ class SearchSelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=view.build_options(),
-            row=1,
+            row=2,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -40,19 +50,34 @@ class SearchView(discord.ui.View):
         query: str,
         delivery_service: "ResultDeliveryService",
         author_id: int | None = None,
+        ephemeral: bool = False,
     ) -> None:
         super().__init__(timeout=600)
-        self.results = results
         self.query = query
         self.delivery_service = delivery_service
         self.author_id = author_id
+        self.ephemeral = ephemeral
         self.current_page = 0
+        self.sort_key: SortKey = "seeders"
+        self.results = _sort_results(results, self.sort_key)
         self.message: discord.Message | None = None
+
+        self.sort_seeders_button = discord.ui.Button(label="🌱 Seeders", row=0)
+        self.sort_seeders_button.callback = self._make_sort_callback("seeders")
+        self.add_item(self.sort_seeders_button)
+
+        self.sort_size_button = discord.ui.Button(label="📦 Tamaño", row=0)
+        self.sort_size_button.callback = self._make_sort_callback("size")
+        self.add_item(self.sort_size_button)
+
+        self.sort_date_button = discord.ui.Button(label="🗓️ Fecha", row=0)
+        self.sort_date_button.callback = self._make_sort_callback("publishDate")
+        self.add_item(self.sort_date_button)
 
         self.previous_button = discord.ui.Button(
             label="⬅️ Anterior",
             style=discord.ButtonStyle.secondary,
-            row=0,
+            row=1,
         )
         self.previous_button.callback = self.on_previous
         self.add_item(self.previous_button)
@@ -60,13 +85,23 @@ class SearchView(discord.ui.View):
         self.next_button = discord.ui.Button(
             label="➡️ Siguiente",
             style=discord.ButtonStyle.secondary,
-            row=0,
+            row=1,
         )
         self.next_button.callback = self.on_next
         self.add_item(self.next_button)
 
         self.result_select: SearchSelect | None = None
         self.refresh_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.author_id is None or interaction.user.id == self.author_id:
+            return True
+
+        await interaction.response.send_message(
+            "Solo el autor de la búsqueda puede interactuar con esta vista.",
+            ephemeral=True,
+        )
+        return False
 
     @property
     def total_pages(self) -> int:
@@ -100,7 +135,19 @@ class SearchView(discord.ui.View):
 
         return options
 
+    def _update_sort_button_styles(self) -> None:
+        mapping = {
+            "seeders": self.sort_seeders_button,
+            "size": self.sort_size_button,
+            "publishDate": self.sort_date_button,
+        }
+        for key, button in mapping.items():
+            button.style = (
+                discord.ButtonStyle.primary if key == self.sort_key else discord.ButtonStyle.secondary
+            )
+
     def refresh_components(self) -> None:
+        self._update_sort_button_styles()
         self.previous_button.disabled = self.current_page <= 0
         self.next_button.disabled = self.current_page >= self.total_pages - 1
 
@@ -135,6 +182,17 @@ class SearchView(discord.ui.View):
         )
         return embed
 
+    def _make_sort_callback(self, sort_key: SortKey):
+        async def callback(interaction: discord.Interaction) -> None:
+            if self.sort_key != sort_key:
+                self.sort_key = sort_key
+                self.results = _sort_results(self.results, sort_key)
+                self.current_page = 0
+            self.refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        return callback
+
     async def on_previous(self, interaction: discord.Interaction) -> None:
         if self.current_page > 0:
             self.current_page -= 1
@@ -156,12 +214,13 @@ class SearchView(discord.ui.View):
             return
 
         result = self.results[selected_index]
-        await interaction.response.defer(thinking=True)
+        await interaction.response.defer(thinking=True, ephemeral=self.ephemeral)
         await self.delivery_service.deliver_result(
             interaction,
             result,
             author_id=self.author_id,
             search_message=self.message,
+            ephemeral=self.ephemeral,
         )
 
     async def on_timeout(self) -> None:

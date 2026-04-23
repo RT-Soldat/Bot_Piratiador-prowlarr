@@ -9,6 +9,8 @@ services:
       - "127.0.0.1:19987:9987"
       - "6881:6881/tcp"
       - "6881:6881/udp"
+    volumes:
+      - ./data:/app/data
     networks:
       - arr-network
 

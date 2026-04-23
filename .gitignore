@@ -8,3 +8,4 @@ venv/
 .vscode/
 *.log
 PLAN.md
+BOT_HANDOFF.md

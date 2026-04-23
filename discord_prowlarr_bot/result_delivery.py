@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from io import BytesIO
 from typing import Any
 
@@ -20,6 +21,7 @@ from .search_utils import (
 from .torrent_builder import TorrentBuilder
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
+_LAST_RESULT_CAP = 200
 
 
 def build_links_view(
@@ -55,7 +57,7 @@ class ResultDeliveryService:
         self.public_base_url = public_base_url
         self.torrent_fetch_timeout = torrent_fetch_timeout
         self.attach_torrent_file = attach_torrent_file
-        self._last_result_messages: dict[tuple[int, int], discord.Message] = {}
+        self._last_result_messages: OrderedDict[tuple[int, int], discord.Message] = OrderedDict()
 
     def close(self) -> None:
         self.torrent_builder.close()
@@ -87,8 +89,9 @@ class ResultDeliveryService:
         content: str,
         view: discord.ui.View | None = None,
         file: discord.File | None = None,
+        ephemeral: bool = False,
     ) -> discord.Message:
-        send_kwargs: dict[str, Any] = {"content": content}
+        send_kwargs: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
 
         if file is not None:
             send_kwargs["file"] = file
@@ -110,8 +113,11 @@ class ResultDeliveryService:
 
         owner_id = author_id or interaction.user.id
         key = (channel_id, owner_id)
-        previous_message = self._last_result_messages.get(key)
+        previous_message = self._last_result_messages.pop(key, None)
         self._last_result_messages[key] = new_message
+
+        while len(self._last_result_messages) > _LAST_RESULT_CAP:
+            self._last_result_messages.popitem(last=False)
 
         if previous_message is None or previous_message.id == new_message.id:
             return
@@ -125,6 +131,7 @@ class ResultDeliveryService:
         *,
         author_id: int | None = None,
         search_message: discord.Message | None = None,
+        ephemeral: bool = False,
     ) -> None:
         title = get_title(result)
         filename = f"{slugify(title)}.torrent"
@@ -134,6 +141,7 @@ class ResultDeliveryService:
         download_resource = None
         progress_message: discord.Message | None = None
         magnet_http_url: str | None = None
+        entry_id: str | None = None
 
         should_resolve_torrent = self.attach_torrent_file
         should_fetch_download = download_url is not None and (
@@ -165,6 +173,7 @@ class ResultDeliveryService:
                     f"Esto puede tardar hasta {format_timeout_seconds(self.torrent_fetch_timeout)}s..."
                 ),
                 wait=True,
+                ephemeral=ephemeral,
             )
             try:
                 torrent_bytes = await self.torrent_builder.fetch_torrent_from_magnet(
@@ -184,6 +193,8 @@ class ResultDeliveryService:
             )
             magnet_http_url = f"{self.public_base_url}/m/{entry_id}"
 
+        sent_message: discord.Message | None = None
+
         if torrent_bytes is not None:
             should_attach_file = self.attach_torrent_file or magnet_url is None
             file = None
@@ -201,12 +212,10 @@ class ResultDeliveryService:
                 ),
                 view=build_links_view(magnet_http_url),
                 file=file,
+                ephemeral=ephemeral,
             )
-            await self.replace_last_result_message(interaction, author_id, sent_message)
-            await self.delete_message_quietly(search_message)
-            return
 
-        if magnet_url is not None:
+        elif magnet_url is not None:
             sent_message = await self.send_result_message(
                 interaction=interaction,
                 content=self.build_result_content(
@@ -214,14 +223,25 @@ class ResultDeliveryService:
                     raw_magnet_url=None if magnet_http_url else magnet_url,
                 ),
                 view=build_links_view(magnet_http_url),
+                ephemeral=ephemeral,
             )
-            await self.replace_last_result_message(interaction, author_id, sent_message)
-            await self.delete_message_quietly(search_message)
-            return
 
-        sent_message = await self.send_result_message(
-            interaction=interaction,
-            content=f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado.",
-        )
-        await self.replace_last_result_message(interaction, author_id, sent_message)
+        else:
+            sent_message = await self.send_result_message(
+                interaction=interaction,
+                content=f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado.",
+                ephemeral=ephemeral,
+            )
+
+        if entry_id is not None and sent_message is not None and not ephemeral:
+            channel_id = sent_message.channel.id if sent_message.channel else interaction.channel_id
+            if channel_id is not None:
+                await self.registry.attach_message_reference(
+                    entry_id,
+                    channel_id,
+                    sent_message.id,
+                )
+
+        if not ephemeral:
+            await self.replace_last_result_message(interaction, author_id, sent_message)
         await self.delete_message_quietly(search_message)

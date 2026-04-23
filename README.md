@@ -42,13 +42,27 @@ docker-compose logs -f
 | `TORRENT_FETCH_TIMEOUT` | No | Tiempo máximo en segundos para resolver metadata vía DHT, por defecto `45` |
 | `LIBTORRENT_LISTEN_PORT` | No | Puerto que usa libtorrent para DHT, por defecto `6881` |
 | `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
+| `REGISTRY_TTL_SECONDS` | No | TTL de los links `/m/` y `/t/` y del mensaje de Discord asociado. Por defecto `604800` (7 días) |
+| `REGISTRY_PURGE_INTERVAL_SECONDS` | No | Intervalo del purge periódico. Por defecto `300` (5 min) |
+| `REGISTRY_DATA_DIR` | No | Directorio de persistencia del registry. Por defecto `/app/data/registry` |
+| `RATE_LIMIT_CALLS` | No | Máximo de búsquedas por usuario en la ventana. Por defecto `5` |
+| `RATE_LIMIT_WINDOW_SECONDS` | No | Ventana del rate limit. Por defecto `60` |
 
 ## Comandos disponibles
 
-- `/buscar <texto>`
-- `/piratear <texto>`
+- `/buscar <texto> [categoria] [min_seeders] [año] [privada]`
+- `/piratear <texto> [categoria] [min_seeders] [año] [privada]`
+- `/status` — ping a Prowlarr, estado de libtorrent, uptime, entradas activas
 
-También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/buscar ubuntu 24.04`, si `Message Content Intent` está habilitado en Discord Developer Portal.
+Filtros opcionales:
+- `categoria`: `peliculas`, `series`, `musica`, `software`, `libros`
+- `min_seeders`: entero, filtra resultados por debajo de ese umbral
+- `año`: entero, filtra títulos que contengan ese año
+- `privada`: `true` para que los resultados sean visibles solo para vos (ephemeral)
+
+Los resultados se pueden re-ordenar en caliente con los botones **🌱 Seeders**, **📦 Tamaño** y **🗓️ Fecha**. Solo el autor de la búsqueda puede interactuar con la vista.
+
+También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/buscar ubuntu 24.04`, si `Message Content Intent` está habilitado en Discord Developer Portal. Los filtros solo están disponibles como slash commands.
 
 ## Entrega de resultados
 
@@ -57,6 +71,8 @@ Al seleccionar un resultado, el bot intenta:
 - usar el `.torrent` directo si Prowlarr lo devuelve
 - generar el `.torrent` vía DHT si solo existe magnet
 - publicar un botón `Abrir magnet` usando `/m/<id>` si `BOT_PUBLIC_BASE_URL` está configurado
+
+Los links `/m/<id>` y `/t/<id>` se persisten en disco (volumen `./data`) y viven `REGISTRY_TTL_SECONDS` (default 7 días). Cuando expiran, el purge periódico borra el archivo y además intenta borrar el mensaje de Discord que contenía el botón.
 
 Si configuras:
 

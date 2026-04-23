@@ -73,10 +73,54 @@ def get_info_hash(result: dict[str, Any]) -> str | None:
 
 
 def get_download_url(result: dict[str, Any]) -> str | None:
-    download_url = result.get("downloadUrl") or result.get("download_url") or result.get("guid")
+    download_url = result.get("downloadUrl") or result.get("download_url")
     if isinstance(download_url, str) and download_url.strip():
         return download_url.strip()
     return None
+
+
+def dedupe_by_info_hash(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    without_hash: list[dict[str, Any]] = []
+
+    for result in results:
+        info_hash = get_info_hash(result)
+        if info_hash is None:
+            without_hash.append(result)
+            continue
+
+        key = info_hash.lower()
+        existing = seen.get(key)
+        if existing is None or parse_positive_int(result.get("seeders")) > parse_positive_int(existing.get("seeders")):
+            seen[key] = result
+
+    return list(seen.values()) + without_hash
+
+
+CATEGORY_CHOICES: dict[str, list[int]] = {
+    "peliculas": [2000],
+    "series": [5000],
+    "musica": [3000],
+    "software": [4000],
+    "libros": [7000],
+}
+
+
+def apply_filters(
+    results: list[dict[str, Any]],
+    min_seeders: int,
+    year: int | None,
+) -> list[dict[str, Any]]:
+    filtered = results
+
+    if min_seeders > 0:
+        filtered = [r for r in filtered if parse_positive_int(r.get("seeders")) >= min_seeders]
+
+    if year is not None:
+        needle = str(year)
+        filtered = [r for r in filtered if needle in get_title(r)]
+
+    return filtered
 
 
 def format_timeout_seconds(seconds: float) -> str:
