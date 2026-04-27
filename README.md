@@ -1,6 +1,6 @@
 # Bot de Discord para Prowlarr
 
-Bot ligero en Python 3.12 que expone `/buscar` y `/piratear` en Discord, consulta Prowlarr y entrega torrents como `.torrent` adjunto y/o botón `Abrir magnet`. Está pensado para correr en Docker en la misma red que `prowlarr`.
+Bot en Python 3.12 que expone `/buscar`, `/piratear` y `/status` en Discord, consulta Prowlarr y entrega torrents como botón `Abrir magnet` y/o archivo `.torrent` adjunto. Corre en Docker en la misma red que Prowlarr.
 
 ## Requisitos previos
 
@@ -11,118 +11,147 @@ Bot ligero en Python 3.12 que expone `/buscar` y `/piratear` en Discord, consult
 ## Setup
 
 1. Crea la aplicación y el bot en https://discord.com/developers/applications.
-2. En el bot, habilita `Message Content Intent` si quieres que el bot también acepte mensajes de texto como `/buscar ubuntu` o `/piratear s04e01` además del slash command normal. Los slash commands por sí solos no dependen de este intent.
+2. En el bot, habilita `Message Content Intent` si quieres que también acepte mensajes de texto como `/buscar ubuntu` además del slash command. Los slash commands no dependen de este intent.
 3. Invita el bot al servidor con scope `bot applications.commands` y permisos `Send Messages`, `Embed Links`, `Attach Files` y `Use Slash Commands`.
-4. Copia `.env.example` a `.env` y completa las variables obligatorias. Si quieres el botón de magnet, configura `BOT_PUBLIC_BASE_URL`. Si quieres adjuntar el `.torrent`, activa `ATTACH_TORRENT_FILE=true`.
+4. Copia `.env.example` a `.env` y completa las variables obligatorias.
 5. Levanta el servicio:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 6. Revisa los logs:
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
+
+El directorio `./data/` se crea automáticamente al arrancar. Ahí se persiste el registry de links.
 
 ## Variables de entorno
 
-| Variable | Obligatoria | Descripcion |
+### Obligatorias
+
+| Variable | Descripción |
+| --- | --- |
+| `DISCORD_TOKEN` | Token del bot de Discord |
+| `ALLOWED_CHANNEL_ID` | ID del canal donde se permiten los comandos |
+| `PROWLARR_URL` | URL base de Prowlarr, por ejemplo `http://prowlarr:9696` |
+| `PROWLARR_API_KEY` | API key copiada desde Prowlarr → Settings → General |
+
+### Opcionales
+
+| Variable | Default | Descripción |
 | --- | --- | --- |
-| `DISCORD_TOKEN` | Si | Token del bot de Discord |
-| `ALLOWED_CHANNEL_ID` | Si | ID del canal donde se permiten `/buscar` y `/piratear` |
-| `PROWLARR_URL` | Si | URL base de Prowlarr, por ejemplo `http://prowlarr:9696` |
-| `PROWLARR_API_KEY` | Si | API key copiada desde Prowlarr |
-| `PROWLARR_TIMEOUT` | No | Timeout de consultas a Prowlarr en segundos, por defecto `90` |
-| `ATTACH_TORRENT_FILE` | No | Si vale `true`, intenta adjuntar también el archivo `.torrent` junto al magnet cuando esté disponible |
-| `BOT_HTTP_LISTEN_HOST` | No | Host donde escucha el servidor HTTP interno del bot, por defecto `0.0.0.0` |
-| `BOT_HTTP_LISTEN_PORT` | No | Puerto HTTP para links clickeables y healthcheck, por defecto `9987` |
-| `BOT_PUBLIC_BASE_URL` | No | URL pública base usada para construir botones `http(s)://` en Discord |
-| `TORRENT_FETCH_TIMEOUT` | No | Tiempo máximo en segundos para resolver metadata vía DHT, por defecto `45` |
-| `LIBTORRENT_LISTEN_PORT` | No | Puerto que usa libtorrent para DHT, por defecto `6881` |
-| `LOG_LEVEL` | No | Nivel de log, por defecto `INFO` |
-| `REGISTRY_TTL_SECONDS` | No | TTL de los links `/m/` y `/t/` y del mensaje de Discord asociado. Por defecto `604800` (7 días) |
-| `REGISTRY_PURGE_INTERVAL_SECONDS` | No | Intervalo del purge periódico. Por defecto `300` (5 min) |
-| `REGISTRY_DATA_DIR` | No | Directorio de persistencia del registry. Por defecto `/app/data/registry` |
-| `RATE_LIMIT_CALLS` | No | Máximo de búsquedas por usuario en la ventana. Por defecto `5` |
-| `RATE_LIMIT_WINDOW_SECONDS` | No | Ventana del rate limit. Por defecto `60` |
+| `PROWLARR_TIMEOUT` | `90` | Timeout de consultas a Prowlarr en segundos. Subir a `180` si hay indexers lentos |
+| `ATTACH_TORRENT_FILE` | `false` | Si vale `true`, adjunta el `.torrent` además del botón de magnet |
+| `BOT_HTTP_LISTEN_HOST` | `0.0.0.0` | Host del servidor HTTP interno |
+| `BOT_HTTP_LISTEN_PORT` | `9987` | Puerto del servidor HTTP interno |
+| `BOT_PUBLIC_BASE_URL` | — | URL pública base para los botones `Abrir magnet`, ej. `http://errete.ddns.net:9987` |
+| `TORRENT_FETCH_TIMEOUT` | `45` | Timeout en segundos para resolver metadata vía DHT |
+| `LIBTORRENT_LISTEN_PORT` | `6881` | Puerto que usa libtorrent para DHT |
+| `LOG_LEVEL` | `INFO` | Nivel de log (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `REGISTRY_TTL_SECONDS` | `604800` | Vida útil de los links `/m/` en segundos (default 7 días). Al vencer se borra el archivo y el mensaje de Discord |
+| `REGISTRY_PURGE_INTERVAL_SECONDS` | `300` | Intervalo del purge periódico en segundos |
+| `REGISTRY_DATA_DIR` | `/app/data/registry` | Directorio de persistencia del registry dentro del contenedor |
+| `RATE_LIMIT_CALLS` | `5` | Máximo de búsquedas permitidas por usuario en la ventana |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Ventana del rate limit en segundos |
+| `SUBTITLE_ENABLED` | `true` | Busca subtítulos automáticamente tras entregar un resultado |
+| `OPENSUBTITLES_API_KEY` | — | API key de OpenSubtitles.com |
+| `OPENSUBTITLES_USERNAME` | — | Usuario de OpenSubtitles.com |
+| `OPENSUBTITLES_PASSWORD` | — | Contraseña de OpenSubtitles.com |
+| `SUBTITLE_LANGUAGES` | `es` | Idiomas separados por coma; el primero se usa como idioma principal |
+| `TRANSLATION_ENABLED` | `true` | Traduce desde inglés si no hay subtítulo en el idioma principal |
+| `TRANSLATION_PROVIDER` | `google` | Proveedor de traducción: `google` o `deepl` |
+| `DEEPL_API_KEY` | — | API key de DeepL si `TRANSLATION_PROVIDER=deepl` |
+| `SUBTITLE_FETCH_TIMEOUT` | `30` | Timeout de búsqueda y descarga de subtítulos en segundos |
 
 ## Comandos disponibles
 
-- `/buscar <texto> [categoria] [min_seeders] [año] [privada]`
-- `/piratear <texto> [categoria] [min_seeders] [año] [privada]`
-- `/status` — ping a Prowlarr, estado de libtorrent, uptime, entradas activas
+| Comando | Descripción |
+| --- | --- |
+| `/buscar <query>` | Busca torrents en Prowlarr |
+| `/piratear <query>` | Alias de `/buscar` |
+| `/status` | Muestra estado del bot: ping a Prowlarr, libtorrent, uptime y entradas activas |
 
-Filtros opcionales:
-- `categoria`: `peliculas`, `series`, `musica`, `software`, `libros`
-- `min_seeders`: entero, filtra resultados por debajo de ese umbral
-- `año`: entero, filtra títulos que contengan ese año
-- `privada`: `true` para que los resultados sean visibles solo para vos (ephemeral)
+También podés escribir `/buscar <query>` como mensaje de texto si `Message Content Intent` está habilitado. Los filtros opcionales solo están disponibles en slash commands.
 
-Los resultados se pueden re-ordenar en caliente con los botones **🌱 Seeders**, **📦 Tamaño** y **🗓️ Fecha**. Solo el autor de la búsqueda puede interactuar con la vista.
+### Filtros opcionales en `/buscar` y `/piratear`
 
-También puedes escribir mensajes de texto con el mismo formato, por ejemplo `/buscar ubuntu 24.04`, si `Message Content Intent` está habilitado en Discord Developer Portal. Los filtros solo están disponibles como slash commands.
+| Parámetro | Tipo | Descripción |
+| --- | --- | --- |
+| `categoria` | Choice | `peliculas`, `series`, `musica`, `software`, `libros` |
+| `min_seeders` | Entero | Oculta resultados con menos seeders que este valor |
+| `año` | Entero | Filtra títulos que no contengan ese año |
+| `privada` | Bool | `true` para que solo vos veas los resultados (ephemeral) |
+
+Los resultados se pueden re-ordenar con los botones **🌱 Seeders**, **📦 Tamaño** y **🗓️ Fecha**. Solo el autor de la búsqueda puede interactuar con la vista.
 
 ## Entrega de resultados
 
-Al seleccionar un resultado, el bot intenta:
+Al seleccionar un resultado, el bot intenta en orden:
 
-- usar el `.torrent` directo si Prowlarr lo devuelve
-- generar el `.torrent` vía DHT si solo existe magnet
-- publicar un botón `Abrir magnet` usando `/m/<id>` si `BOT_PUBLIC_BASE_URL` está configurado
+1. Usar el `.torrent` directo si Prowlarr lo devuelve.
+2. Generar el `.torrent` vía DHT (solo si `ATTACH_TORRENT_FILE=true`).
+3. Publicar un botón `Abrir magnet` vía `/m/<id>` si `BOT_PUBLIC_BASE_URL` está configurado.
 
-Los links `/m/<id>` y `/t/<id>` se persisten en disco (volumen `./data`) y viven `REGISTRY_TTL_SECONDS` (default 7 días). Cuando expiran, el purge periódico borra el archivo y además intenta borrar el mensaje de Discord que contenía el botón.
+Los links `/m/<id>` se persisten en disco (`./data/registry/`) y viven `REGISTRY_TTL_SECONDS` (default 7 días). Al vencer, el bot borra el archivo del disco y elimina el mensaje de Discord que contenía el botón.
 
-Si configuras:
+## Subtítulos
 
-```env
-ATTACH_TORRENT_FILE=true
-```
+El bot puede buscar subtítulos automáticamente en OpenSubtitles.com después de entregar el magnet o `.torrent`. Requiere una cuenta gratuita y una API key creada en https://www.opensubtitles.com/es/consumers.
 
-adjunta el `.torrent` cuando lo tenga disponible.
+`SUBTITLE_ENABLED` viene activo por defecto, pero si falta `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME` u `OPENSUBTITLES_PASSWORD`, el bot arranca igual, escribe un warning y desactiva solo esta función. El free tier suele alcanzar para uso personal, con un límite de 20 descargas por día.
 
-El bot expone además:
+`SUBTITLE_LANGUAGES=es` busca subtítulos en español. Podés usar varios idiomas separados por coma, por ejemplo `es,en`. Si no encuentra subtítulo en el primer idioma y `TRANSLATION_ENABLED=true`, intenta descargar uno en inglés y traducirlo al idioma principal. `TRANSLATION_PROVIDER=google` no requiere API key; para DeepL usa `TRANSLATION_PROVIDER=deepl` y completa `DEEPL_API_KEY`.
+
+El servidor HTTP expone también un healthcheck:
 
 ```bash
 curl http://127.0.0.1:19987/health
 ```
 
-para verificar que el servidor HTTP embebido está arriba cuando Docker se publica solo en loopback.
-
 ## Nginx
 
-Si quieres mantener la URL pública en `http://errete.ddns.net:9987`, una configuración práctica es:
+Si querés exponer el servidor HTTP públicamente detrás de Nginx:
 
-- publicar el contenedor en `127.0.0.1:19987:9987`
-- dejar `BOT_PUBLIC_BASE_URL=http://errete.ddns.net:9987`
-- hacer proxy con `nginx` desde `:9987` hacia `http://127.0.0.1:19987`
+- Publicá el contenedor solo en loopback: `127.0.0.1:19987:9987`
+- Configurá `BOT_PUBLIC_BASE_URL=http://errete.ddns.net:9987`
+- Hacé proxy con Nginx desde `:9987` hacia `http://127.0.0.1:19987`
 
 ## Troubleshooting
 
 ### El slash command no aparece
 
-- Espera unos segundos tras iniciar el bot.
-- Confirma que el bot tenga el scope `applications.commands`.
-- Revisa `docker-compose logs -f` para verificar que el `tree.sync()` se haya ejecutado sin errores.
+- Esperá unos segundos tras iniciar el bot.
+- Confirmá que el bot tenga el scope `applications.commands`.
+- Revisá los logs: `docker compose logs -f` y buscá la línea `Se sincronizaron N slash commands globales`.
 
-### Falla la conexion a Prowlarr
+### Prowlarr tarda demasiado / ReadTimeout
 
-- Verifica que `PROWLARR_URL` sea `http://prowlarr:9696` si ambos contenedores comparten la red `jellyfinarr-stack_default`.
-- Comprueba que `PROWLARR_API_KEY` sea valida.
-- Si Prowlarr tarda demasiado en responder, aumenta `PROWLARR_TIMEOUT` en el `.env`, por ejemplo a `120`.
-- Asegurate de que la red externa exista en el host y de que el contenedor `prowlarr` este conectado a ella.
+- Aumentá `PROWLARR_TIMEOUT` en el `.env`, por ejemplo a `180`.
+- En Prowlarr revisá qué indexers tienen alta latencia o errores (Prowlarr → System → Tasks o Indexers).
+
+### Falla la conexión a Prowlarr
+
+- Verificá que `PROWLARR_URL` use el nombre del servicio Docker, ej. `http://prowlarr:9696`.
+- Comprobá que `PROWLARR_API_KEY` sea válida.
+- Asegurate de que la red externa `jellyfinarr-stack_default` exista y que el contenedor `prowlarr` esté conectado a ella.
 
 ### El bot no puede enviar archivos
 
-- Revisa que el bot tenga permisos `Attach Files` en el canal configurado.
+- Revisá que el bot tenga el permiso `Attach Files` en el canal configurado.
 
-### Los botones no funcionan
+### Los botones `Abrir magnet` no funcionan
 
-- Confirma que `BOT_PUBLIC_BASE_URL` apunte al host correcto y no termine con `/`.
-- Si usas `nginx`, verifica primero el backend local con `http://127.0.0.1:19987/health`.
-- Comprueba también el endpoint público `http://<tu-host>:9987/health`.
+- Confirmá que `BOT_PUBLIC_BASE_URL` no termine con `/` y apunte al host correcto.
+- Verificá el backend con `curl http://127.0.0.1:19987/health`.
+- Si el link venció (más de 7 días por default), el mensaje ya fue borrado automáticamente.
 
 ### El comando responde fuera del canal esperado
 
-- Confirma que `ALLOWED_CHANNEL_ID` sea el ID correcto del canal y que no tenga espacios extras en el `.env`.
+- Confirmá que `ALLOWED_CHANNEL_ID` sea el ID correcto del canal y que no tenga espacios en el `.env`.
+
+### Error de permisos en `/app/data`
+
+- El entrypoint del contenedor crea el directorio y le asigna permisos automáticamente. Si el error persiste, verificá que el volumen `./data` en el host sea accesible por Docker.

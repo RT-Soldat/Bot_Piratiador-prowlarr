@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,6 +28,15 @@ class Config:
     registry_data_dir: Path = Path("/app/data/registry")
     rate_limit_calls: int = 5
     rate_limit_window_seconds: int = 60
+    subtitle_enabled: bool = True
+    opensubtitles_api_key: str = ""
+    opensubtitles_username: str = ""
+    opensubtitles_password: str = ""
+    subtitle_languages: list[str] = field(default_factory=lambda: ["es"])
+    translation_enabled: bool = True
+    translation_provider: str = "google"
+    deepl_api_key: str = ""
+    subtitle_fetch_timeout: float = 30.0
 
 
 def configure_logging(config: Config) -> None:
@@ -112,6 +121,48 @@ def load_config() -> Config:
         LOGGER.error("RATE_LIMIT_WINDOW_SECONDS debe ser mayor que 0.")
         raise SystemExit(1)
 
+    subtitle_enabled = parse_bool_env("SUBTITLE_ENABLED", True)
+    opensubtitles_api_key = os.getenv("OPENSUBTITLES_API_KEY", "").strip()
+    opensubtitles_username = os.getenv("OPENSUBTITLES_USERNAME", "").strip()
+    opensubtitles_password = os.getenv("OPENSUBTITLES_PASSWORD", "").strip()
+
+    subtitle_languages_raw = os.getenv("SUBTITLE_LANGUAGES", "es").strip()
+    subtitle_languages = [
+        lang.strip().lower()
+        for lang in subtitle_languages_raw.split(",")
+        if lang.strip()
+    ]
+    if not subtitle_languages:
+        subtitle_languages = ["es"]
+
+    translation_enabled = parse_bool_env("TRANSLATION_ENABLED", True)
+    translation_provider = os.getenv("TRANSLATION_PROVIDER", "google").strip().lower()
+    if translation_provider not in {"google", "deepl"}:
+        LOGGER.error("TRANSLATION_PROVIDER debe ser 'google' o 'deepl'.")
+        raise SystemExit(1)
+
+    deepl_api_key = os.getenv("DEEPL_API_KEY", "").strip()
+
+    subtitle_fetch_timeout = parse_float_env("SUBTITLE_FETCH_TIMEOUT", 30.0)
+    if subtitle_fetch_timeout <= 0:
+        LOGGER.error("SUBTITLE_FETCH_TIMEOUT debe ser mayor que 0.")
+        raise SystemExit(1)
+
+    if subtitle_enabled and (
+        not opensubtitles_api_key
+        or not opensubtitles_username
+        or not opensubtitles_password
+    ):
+        LOGGER.warning(
+            "SUBTITLE_ENABLED=true pero faltan OPENSUBTITLES_API_KEY, "
+            "OPENSUBTITLES_USERNAME o OPENSUBTITLES_PASSWORD. Subtítulos desactivados."
+        )
+        subtitle_enabled = False
+
+    if subtitle_enabled and translation_enabled and translation_provider == "deepl" and not deepl_api_key:
+        LOGGER.warning("TRANSLATION_PROVIDER=deepl pero falta DEEPL_API_KEY. Traducción desactivada.")
+        translation_enabled = False
+
     if missing:
         LOGGER.error("Faltan variables de entorno obligatorias: %s", ", ".join(missing))
         raise SystemExit(1)
@@ -134,6 +185,15 @@ def load_config() -> Config:
         registry_data_dir=registry_data_dir,
         rate_limit_calls=rate_limit_calls,
         rate_limit_window_seconds=rate_limit_window_seconds,
+        subtitle_enabled=subtitle_enabled,
+        opensubtitles_api_key=opensubtitles_api_key,
+        opensubtitles_username=opensubtitles_username,
+        opensubtitles_password=opensubtitles_password,
+        subtitle_languages=subtitle_languages,
+        translation_enabled=translation_enabled,
+        translation_provider=translation_provider,
+        deepl_api_key=deepl_api_key,
+        subtitle_fetch_timeout=subtitle_fetch_timeout,
     )
 
 

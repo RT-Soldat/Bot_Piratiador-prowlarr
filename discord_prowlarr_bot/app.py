@@ -12,6 +12,7 @@ from .http_server import TorrentRegistry, start_http_server
 from .prowlarr import ProwlarrClient
 from .rate_limit import RateLimiter
 from .result_delivery import ResultDeliveryService
+from .subtitles import SubtitleService
 from .torrent_builder import TorrentBuilder
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
@@ -43,6 +44,11 @@ async def async_main() -> None:
     else:
         LOGGER.info("BOT_PUBLIC_BASE_URL está vacío. El bot solo enviará adjuntos o magnet en texto plano.")
 
+    subtitle_service: SubtitleService | None = None
+    if config.subtitle_enabled:
+        subtitle_service = SubtitleService(config)
+        LOGGER.info("Servicio de subtítulos habilitado (idiomas: %s).", ", ".join(config.subtitle_languages))
+
     delivery_service = ResultDeliveryService(
         prowlarr_client=prowlarr_client,
         torrent_builder=torrent_builder,
@@ -50,6 +56,8 @@ async def async_main() -> None:
         public_base_url=config.public_base_url,
         torrent_fetch_timeout=config.torrent_fetch_timeout,
         attach_torrent_file=config.attach_torrent_file,
+        subtitle_service=subtitle_service,
+        subtitle_fetch_timeout=config.subtitle_fetch_timeout,
     )
     rate_limiter = RateLimiter(
         max_calls=config.rate_limit_calls,
@@ -101,6 +109,8 @@ async def async_main() -> None:
         await registry.stop_purge_task()
         if not client.is_closed():
             await client.close()
+        if subtitle_service is not None:
+            await subtitle_service.close()
         await http_runner.cleanup()
 
 

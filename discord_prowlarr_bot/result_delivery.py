@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import OrderedDict
 from io import BytesIO
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 
@@ -19,6 +20,9 @@ from .search_utils import (
     get_title,
 )
 from .torrent_builder import TorrentBuilder
+
+if TYPE_CHECKING:
+    from .subtitles import SubtitleService
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 _LAST_RESULT_CAP = 200
@@ -50,6 +54,8 @@ class ResultDeliveryService:
         public_base_url: str,
         torrent_fetch_timeout: float,
         attach_torrent_file: bool,
+        subtitle_service: SubtitleService | None = None,
+        subtitle_fetch_timeout: float = 30.0,
     ) -> None:
         self.prowlarr_client = prowlarr_client
         self.torrent_builder = torrent_builder
@@ -57,6 +63,8 @@ class ResultDeliveryService:
         self.public_base_url = public_base_url
         self.torrent_fetch_timeout = torrent_fetch_timeout
         self.attach_torrent_file = attach_torrent_file
+        self.subtitle_service = subtitle_service
+        self._subtitle_fetch_timeout = subtitle_fetch_timeout
         self._last_result_messages: OrderedDict[tuple[int, int], discord.Message] = OrderedDict()
 
     def close(self) -> None:
@@ -195,6 +203,8 @@ class ResultDeliveryService:
 
         sent_message: discord.Message | None = None
 
+        result_delivered = torrent_bytes is not None or magnet_url is not None
+
         if torrent_bytes is not None:
             should_attach_file = self.attach_torrent_file or magnet_url is None
             file = None
@@ -245,3 +255,41 @@ class ResultDeliveryService:
         if not ephemeral:
             await self.replace_last_result_message(interaction, author_id, sent_message)
         await self.delete_message_quietly(search_message)
+
+        if result_delivered:
+            await self._try_send_subtitles(interaction, title, ephemeral=ephemeral)
+
+    async def _try_send_subtitles(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        ephemeral: bool = False,
+    ) -> None:
+        if self.subtitle_service is None:
+            return
+
+        try:
+            subtitles = await asyncio.wait_for(
+                self.subtitle_service.find_for_title(title),
+                timeout=self._subtitle_fetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            LOGGER.warning("Timeout buscando subtítulos para '%s'.", title)
+            return
+        except Exception:
+            LOGGER.exception("Error buscando subtítulos para '%s'.", title)
+            return
+
+        for language, srt_bytes in subtitles:
+            try:
+                await interaction.followup.send(
+                    f"📄 Subtítulos ({language})",
+                    file=discord.File(
+                        fp=BytesIO(srt_bytes),
+                        filename=f"{slugify(title)}.{language}.srt",
+                    ),
+                    ephemeral=ephemeral,
+                    wait=True,
+                )
+            except discord.HTTPException:
+                LOGGER.warning("No se pudo enviar el subtítulo '%s' para '%s'.", language, title)
