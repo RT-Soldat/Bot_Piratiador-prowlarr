@@ -27,6 +27,17 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 _LAST_RESULT_CAP = 200
 _MAX_DISCORD_FILES = 10
+_FINAL_PROGRESS_KEYWORDS = (
+    "finalizada",
+    "finalizado",
+    "falló",
+    "fallo",
+    "timeout",
+    "listos",
+    "listas",
+    "disponible",
+    "encontraron",
+)
 FilePayload = tuple[str, bytes]
 
 
@@ -142,6 +153,7 @@ class ResultDeliveryService:
         author_id: int | None = None,
         search_message: discord.Message | None = None,
         progress_message: discord.Message | None = None,
+        search_timing_lines: tuple[str, ...] = (),
         ephemeral: bool = False,
     ) -> None:
         title = get_title(result)
@@ -253,7 +265,7 @@ class ResultDeliveryService:
             )
             if subtitle_languages:
                 content += "\n" + f"📄 Subtítulos adjuntos: {', '.join(subtitle_languages)}"
-            content = self._append_progress_summary(content, progress)
+            content = self._append_progress_summary(content, progress, search_timing_lines)
 
             sent_message = await self._edit_or_send_final_message(
                 interaction=interaction,
@@ -383,8 +395,21 @@ class ResultDeliveryService:
             for filename, file_bytes in file_payloads
         ]
 
-    def _append_progress_summary(self, content: str, progress: ProgressReporter) -> str:
-        summary = progress.render("Tiempos de entrega")
+    def _append_progress_summary(
+        self,
+        content: str,
+        progress: ProgressReporter,
+        search_timing_lines: tuple[str, ...],
+    ) -> str:
+        summary_parts: list[str] = []
+        if search_timing_lines:
+            summary_parts.append(
+                progress.render_lines(search_timing_lines, heading="Tiempos de búsqueda")
+            )
+        summary_parts.append(
+            progress.render_filtered(_FINAL_PROGRESS_KEYWORDS, heading="Tiempos de entrega")
+        )
+        summary = "\n".join(summary_parts)
         full_content = content + "\n\n" + summary
         if len(full_content) <= 1900:
             return full_content

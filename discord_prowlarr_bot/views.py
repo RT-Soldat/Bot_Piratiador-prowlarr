@@ -51,6 +51,7 @@ class SearchView(discord.ui.View):
         delivery_service: "ResultDeliveryService",
         author_id: int | None = None,
         ephemeral: bool = False,
+        search_timing_lines: tuple[str, ...] = (),
     ) -> None:
         super().__init__(timeout=600)
         self.query = query
@@ -61,6 +62,7 @@ class SearchView(discord.ui.View):
         self.sort_key: SortKey = "seeders"
         self.results = _sort_results(results, self.sort_key)
         self.message: discord.Message | None = None
+        self.search_timing_lines = search_timing_lines
 
         self.sort_seeders_button = discord.ui.Button(label="🌱 Seeders", row=0)
         self.sort_seeders_button.callback = self._make_sort_callback("seeders")
@@ -235,6 +237,7 @@ class SearchView(discord.ui.View):
             result,
             author_id=self.author_id,
             progress_message=progress_message,
+            search_timing_lines=self.search_timing_lines,
             ephemeral=self.ephemeral,
         )
 

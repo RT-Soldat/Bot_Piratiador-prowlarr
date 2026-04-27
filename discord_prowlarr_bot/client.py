@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -24,6 +25,7 @@ from .views import SearchView
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 ADVANCED_SEARCH_FLAGS = {"--avanzada", "--avanzado", "--full", "--todo", "--todos"}
+SERIES_QUERY_PATTERN = re.compile(r"\b(?:s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3})\b", re.IGNORECASE)
 
 
 def extract_advanced_search_flag(query: str) -> tuple[str, bool]:
@@ -42,10 +44,37 @@ def get_search_result_limit(config: Config, avanzada: bool) -> int | None:
     return config.search_result_limit
 
 
-def format_search_start(result_limit: int | None) -> str:
+def get_search_indexer_ids(config: Config, avanzada: bool) -> list[int] | None:
+    if avanzada or not config.prowlarr_search_indexer_ids:
+        return None
+    return config.prowlarr_search_indexer_ids
+
+
+def infer_categories(query: str, categoria: str | None) -> tuple[list[int] | None, str | None]:
+    if categoria:
+        return CATEGORY_CHOICES.get(categoria), None
+    if SERIES_QUERY_PATTERN.search(query):
+        return CATEGORY_CHOICES["series"], "series"
+    return None, None
+
+
+def format_search_start(result_limit: int | None, indexer_ids: list[int] | None) -> str:
+    scope = "todos los indexers"
+    if indexer_ids:
+        scope = "indexers " + ", ".join(str(indexer_id) for indexer_id in indexer_ids)
+
     if result_limit is None:
-        return "Inicia búsqueda avanzada en Prowlarr (sin límite local)"
-    return f"Inicia búsqueda en Prowlarr (límite: {result_limit})"
+        return f"Inicia búsqueda avanzada en Prowlarr ({scope}, sin límite local)"
+    return f"Inicia búsqueda en Prowlarr ({scope}, límite: {result_limit})"
+
+
+def format_indexer_line(indexer: dict[str, Any]) -> str:
+    indexer_id = indexer.get("id")
+    name = str(indexer.get("name") or "Sin nombre")
+    protocol = str(indexer.get("protocol") or "?")
+    enabled = bool(indexer.get("enable"))
+    status = "✅" if enabled else "⏸️"
+    return f"{status} `{indexer_id}` {name} ({protocol})"
 
 
 async def apply_search_result_limit(
@@ -118,6 +147,7 @@ class ProwlarrDiscordClient(discord.Client):
         query: str,
         author_id: int | None,
         ephemeral: bool = False,
+        search_timing_lines: tuple[str, ...] = (),
     ) -> SearchView:
         return SearchView(
             results=results,
@@ -125,6 +155,7 @@ class ProwlarrDiscordClient(discord.Client):
             delivery_service=self.delivery_service,
             author_id=author_id,
             ephemeral=ephemeral,
+            search_timing_lines=search_timing_lines,
         )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -169,6 +200,8 @@ class ProwlarrDiscordClient(discord.Client):
             return
 
         result_limit = get_search_result_limit(self.config, avanzada)
+        indexer_ids = get_search_indexer_ids(self.config, avanzada)
+        categories, inferred_category = infer_categories(cleaned_query, None)
         progress_message = await message.channel.send(f"⏱️ **Búsqueda: {cleaned_query}**")
         progress = ProgressReporter(
             f"Búsqueda: {cleaned_query}",
@@ -176,9 +209,16 @@ class ProwlarrDiscordClient(discord.Client):
             logger=LOGGER,
         )
 
-        await progress.mark(format_search_start(result_limit))
+        await progress.mark(format_search_start(result_limit, indexer_ids))
+        if inferred_category:
+            await progress.mark(f"Categoría inferida: {inferred_category}")
         try:
-            results = await self.prowlarr_client.search(cleaned_query, limit=result_limit)
+            results = await self.prowlarr_client.search(
+                cleaned_query,
+                categories=categories,
+                limit=result_limit,
+                indexer_ids=indexer_ids,
+            )
         except Exception as exc:
             LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
             await progress_message.edit(
@@ -210,6 +250,7 @@ class ProwlarrDiscordClient(discord.Client):
             results=deduped,
             query=cleaned_query,
             author_id=message.author.id,
+            search_timing_lines=progress.lines,
         )
         await progress.mark("Vista de resultados lista")
         await progress_message.edit(
@@ -263,6 +304,7 @@ async def execute_search(
 
     cleaned_query = query.strip()
     result_limit = get_search_result_limit(client.config, avanzada)
+    indexer_ids = get_search_indexer_ids(client.config, avanzada)
     await interaction.response.defer(thinking=True, ephemeral=privada)
     progress = ProgressReporter(
         f"Búsqueda: {cleaned_query}",
@@ -270,14 +312,17 @@ async def execute_search(
         logger=LOGGER,
     )
 
-    categories = CATEGORY_CHOICES.get(categoria) if categoria else None
+    categories, inferred_category = infer_categories(cleaned_query, categoria)
 
-    await progress.mark(format_search_start(result_limit))
+    await progress.mark(format_search_start(result_limit, indexer_ids))
+    if inferred_category:
+        await progress.mark(f"Categoría inferida: {inferred_category}")
     try:
         results = await client.prowlarr_client.search(
             cleaned_query,
             categories=categories,
             limit=result_limit,
+            indexer_ids=indexer_ids,
         )
     except Exception as exc:
         LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
@@ -313,6 +358,7 @@ async def execute_search(
         query=cleaned_query,
         author_id=interaction.user.id,
         ephemeral=privada,
+        search_timing_lines=progress.lines,
     )
     await progress.mark("Vista de resultados lista")
     message = await interaction.edit_original_response(
@@ -431,3 +477,29 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @client.tree.command(name="indexers", description="Lista los indexers de Prowlarr y sus IDs")
+    async def indexers(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        try:
+            indexer_list = await client.prowlarr_client.list_indexers()
+        except Exception:
+            LOGGER.exception("No se pudo listar indexers de Prowlarr.")
+            await interaction.followup.send("No se pudo listar indexers. Revisá los logs.", ephemeral=True)
+            return
+
+        preferred = client.config.prowlarr_search_indexer_ids
+        lines = [format_indexer_line(indexer) for indexer in indexer_list]
+        content = "**Indexers de Prowlarr**\n"
+        if preferred:
+            content += "Usados por defecto: `" + ", ".join(str(indexer_id) for indexer_id in preferred) + "`\n"
+        else:
+            content += "Usados por defecto: todos\n"
+        content += "\n".join(lines[:35])
+
+        if len(lines) > 35:
+            content += f"\n... y {len(lines) - 35} más."
+
+        content += "\n\nPara limitar búsquedas rápidas, usa `PROWLARR_SEARCH_INDEXER_IDS=1,2,3`."
+        await interaction.followup.send(content=content[:1900], ephemeral=True)

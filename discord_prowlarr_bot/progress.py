@@ -27,6 +27,10 @@ class ProgressReporter:
     def elapsed(self) -> float:
         return time.monotonic() - self._started_at
 
+    @property
+    def lines(self) -> tuple[str, ...]:
+        return tuple(self._lines)
+
     async def mark(self, message: str) -> None:
         line = f"{self.elapsed():5.1f}s {message}"
         self._lines.append(line)
@@ -40,7 +44,23 @@ class ProgressReporter:
             self._logger.debug("No se pudo actualizar el mensaje de progreso.", exc_info=True)
 
     def render(self, heading: str | None = None) -> str:
-        visible_lines = self._lines[-self._max_lines :]
+        return self.render_lines(self._lines, heading=heading)
+
+    def render_filtered(
+        self,
+        keywords: tuple[str, ...],
+        heading: str | None = None,
+    ) -> str:
+        lowered_keywords = tuple(keyword.lower() for keyword in keywords)
+        lines = [
+            line
+            for line in self._lines
+            if any(keyword in line.lower() for keyword in lowered_keywords)
+        ]
+        return self.render_lines(lines, heading=heading)
+
+    def render_lines(self, lines: list[str] | tuple[str, ...], heading: str | None = None) -> str:
+        visible_lines = list(lines)[-self._max_lines :]
         if not visible_lines:
             visible_lines = [f"{self.elapsed():5.1f}s Iniciando..."]
 

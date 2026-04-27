@@ -57,6 +57,7 @@ El directorio `./data/` se crea automáticamente al arrancar. Ahí se persiste e
 | `RATE_LIMIT_CALLS` | `5` | Máximo de búsquedas permitidas por usuario en la ventana |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Ventana del rate limit en segundos |
 | `SEARCH_RESULT_LIMIT` | `10` | Resultados a mostrar por defecto; usa `0` para no limitar |
+| `PROWLARR_SEARCH_INDEXER_IDS` | — | IDs de indexers preferidos para búsquedas rápidas, separados por coma |
 | `SUBTITLE_ENABLED` | `true` | Busca subtítulos automáticamente tras entregar un resultado |
 | `OPENSUBTITLES_API_KEY` | — | API key de OpenSubtitles.com |
 | `OPENSUBTITLES_USERNAME` | — | Usuario de OpenSubtitles.com |
@@ -74,6 +75,7 @@ El directorio `./data/` se crea automáticamente al arrancar. Ahí se persiste e
 | `/buscar <query>` | Busca torrents en Prowlarr |
 | `/piratear <query>` | Alias de `/buscar` |
 | `/status` | Muestra estado del bot: ping a Prowlarr, libtorrent, uptime y entradas activas |
+| `/indexers` | Lista indexers de Prowlarr con sus IDs para configurar búsquedas rápidas |
 
 También podés escribir `/buscar <query>` como mensaje de texto si `Message Content Intent` está habilitado. Los filtros opcionales solo están disponibles en slash commands, salvo `--avanzada`, que también funciona en texto.
 
@@ -88,6 +90,8 @@ También podés escribir `/buscar <query>` como mensaje de texto si `Message Con
 | `avanzada` | Bool | `true` para traer todos los resultados en vez del límite default |
 
 Los resultados se pueden re-ordenar con los botones **🌱 Seeders**, **📦 Tamaño** y **🗓️ Fecha**. Solo el autor de la búsqueda puede interactuar con la vista.
+
+Si `PROWLARR_SEARCH_INDEXER_IDS` está configurado, las búsquedas normales consultan solo esos indexers. Usa `avanzada=true` para consultar todos. Además, si la query trae formato de serie como `S04E02`, el bot infiere categoría `series` automáticamente para no buscar en todas las categorías.
 
 ## Entrega de resultados
 

@@ -29,6 +29,7 @@ class Config:
     rate_limit_calls: int = 5
     rate_limit_window_seconds: int = 60
     search_result_limit: int = 10
+    prowlarr_search_indexer_ids: list[int] = field(default_factory=list)
     subtitle_enabled: bool = True
     opensubtitles_api_key: str = ""
     opensubtitles_username: str = ""
@@ -127,6 +128,8 @@ def load_config() -> Config:
         LOGGER.error("SEARCH_RESULT_LIMIT debe ser 0 o mayor.")
         raise SystemExit(1)
 
+    prowlarr_search_indexer_ids = parse_int_list_env("PROWLARR_SEARCH_INDEXER_IDS")
+
     subtitle_enabled = parse_bool_env("SUBTITLE_ENABLED", True)
     opensubtitles_api_key = os.getenv("OPENSUBTITLES_API_KEY", "").strip()
     opensubtitles_username = os.getenv("OPENSUBTITLES_USERNAME", "").strip()
@@ -192,6 +195,7 @@ def load_config() -> Config:
         rate_limit_calls=rate_limit_calls,
         rate_limit_window_seconds=rate_limit_window_seconds,
         search_result_limit=search_result_limit,
+        prowlarr_search_indexer_ids=prowlarr_search_indexer_ids,
         subtitle_enabled=subtitle_enabled,
         opensubtitles_api_key=opensubtitles_api_key,
         opensubtitles_username=opensubtitles_username,
@@ -241,6 +245,31 @@ def parse_float_env(name: str, default: float) -> float:
     except ValueError:
         LOGGER.error("%s debe ser un numero valido.", name)
         raise SystemExit(1) from None
+
+
+def parse_int_list_env(name: str) -> list[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return []
+
+    values: list[int] = []
+    for item in raw.split(","):
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+
+        try:
+            value = int(cleaned)
+        except ValueError:
+            LOGGER.error("%s debe ser una lista de enteros separados por coma.", name)
+            raise SystemExit(1) from None
+
+        if value <= 0:
+            LOGGER.error("%s solo acepta IDs mayores que 0.", name)
+            raise SystemExit(1)
+        values.append(value)
+
+    return values
 
 
 def validate_port(name: str, value: int) -> None:

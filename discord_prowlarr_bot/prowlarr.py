@@ -32,12 +32,15 @@ class ProwlarrClient:
         query: str,
         categories: list[int] | None = None,
         limit: int | None = None,
+        indexer_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         params: list[tuple[str, str]] = [("query", query), ("type", "search")]
         if categories:
             params.extend(("categories", str(cat)) for cat in categories)
         if limit is not None and limit > 0:
             params.append(("limit", str(limit)))
+        if indexer_ids:
+            params.extend(("indexerIds", str(indexer_id)) for indexer_id in indexer_ids)
 
         response = await self._client.get(
             f"{self.base_url}/api/v1/search",
@@ -51,6 +54,17 @@ class ProwlarrClient:
         if payload is None:
             return []
         raise ValueError("La respuesta de Prowlarr no es una lista de resultados.")
+
+    async def list_indexers(self) -> list[dict[str, Any]]:
+        response = await self._client.get(f"{self.base_url}/api/v1/indexer")
+        response.raise_for_status()
+
+        payload = response.json()
+        if isinstance(payload, list):
+            return payload
+        if payload is None:
+            return []
+        raise ValueError("La respuesta de Prowlarr no es una lista de indexers.")
 
     async def ping(self) -> bool:
         try:
