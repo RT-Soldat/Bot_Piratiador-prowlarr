@@ -31,14 +31,11 @@ class ProwlarrClient:
         self,
         query: str,
         categories: list[int] | None = None,
-        limit: int | None = None,
         indexer_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         params: list[tuple[str, str]] = [("query", query), ("type", "search")]
         if categories:
             params.extend(("categories", str(cat)) for cat in categories)
-        if limit is not None and limit > 0:
-            params.append(("limit", str(limit)))
         if indexer_ids:
             params.extend(("indexerIds", str(indexer_id)) for indexer_id in indexer_ids)
 

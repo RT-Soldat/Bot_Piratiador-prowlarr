@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 LOGGER = logging.getLogger("discord_prowlarr_bot.progress")
-EditCallback = Callable[[str], Awaitable[None]]
+EditCallback = Callable[[str], Awaitable[Any]]
 
 
 class ProgressReporter:

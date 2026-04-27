@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import discord
@@ -26,6 +27,8 @@ from .views import SearchView
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 ADVANCED_SEARCH_FLAGS = {"--avanzada", "--avanzado", "--full", "--todo", "--todos"}
 SERIES_QUERY_PATTERN = re.compile(r"\b(?:s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3})\b", re.IGNORECASE)
+
+_EditFn = Callable[[str, discord.Embed | None, discord.ui.View | None], Awaitable[Any]]
 
 
 def extract_advanced_search_flag(query: str) -> tuple[str, bool]:
@@ -89,6 +92,71 @@ async def apply_search_result_limit(
     return results[:result_limit]
 
 
+async def _run_search_pipeline(
+    prowlarr_client: Any,
+    config: Config,
+    delivery_service: ResultDeliveryService,
+    progress: ProgressReporter,
+    cleaned_query: str,
+    categories: list[int] | None,
+    inferred_category: str | None,
+    result_limit: int | None,
+    indexer_ids: list[int] | None,
+    min_seeders: int,
+    año: int | None,
+    author_id: int | None,
+    ephemeral: bool,
+    edit_fn: _EditFn,
+) -> None:
+    await progress.mark(format_search_start(result_limit, indexer_ids))
+    if inferred_category:
+        await progress.mark(f"Categoría inferida: {inferred_category}")
+    try:
+        results = await prowlarr_client.search(
+            cleaned_query,
+            categories=categories,
+            indexer_ids=indexer_ids,
+        )
+    except Exception as exc:
+        LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
+        await edit_fn(
+            progress.render("Búsqueda fallida") + "\n" + get_search_error_message(exc, config.prowlarr_timeout),
+            None,
+            None,
+        )
+        return
+
+    await progress.mark(f"Búsqueda finalizada: {len(results)} resultados")
+    results = await apply_search_result_limit(results, result_limit, progress)
+
+    if min_seeders > 0 or año is not None:
+        await progress.mark("Aplicando filtros")
+        results = apply_filters(results, min_seeders=min_seeders, year=año)
+
+    deduped = dedupe_by_info_hash(results)
+    await progress.mark(f"Resultados únicos: {len(deduped)}")
+
+    if not deduped:
+        await edit_fn(
+            progress.render("Sin resultados") + f"\nNo se encontraron resultados para: {cleaned_query}",
+            None,
+            None,
+        )
+        return
+
+    view = SearchView(
+        results=deduped,
+        query=cleaned_query,
+        delivery_service=delivery_service,
+        author_id=author_id,
+        ephemeral=ephemeral,
+        search_timing_lines=progress.lines,
+    )
+    await progress.mark("Vista de resultados lista")
+    msg = await edit_fn(progress.render("Resultados listos"), view.build_embed(), view)
+    view.message = msg
+
+
 class ProwlarrDiscordClient(discord.Client):
     def __init__(
         self,
@@ -141,23 +209,6 @@ class ProwlarrDiscordClient(discord.Client):
         await self.prowlarr_client.close()
         await super().close()
 
-    def create_search_view(
-        self,
-        results: list[dict[str, Any]],
-        query: str,
-        author_id: int | None,
-        ephemeral: bool = False,
-        search_timing_lines: tuple[str, ...] = (),
-    ) -> SearchView:
-        return SearchView(
-            results=results,
-            query=query,
-            delivery_service=self.delivery_service,
-            author_id=author_id,
-            ephemeral=ephemeral,
-            search_timing_lines=search_timing_lines,
-        )
-
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.content:
             return
@@ -203,62 +254,31 @@ class ProwlarrDiscordClient(discord.Client):
         indexer_ids = get_search_indexer_ids(self.config, avanzada)
         categories, inferred_category = infer_categories(cleaned_query, None)
         progress_message = await message.channel.send(f"⏱️ **Búsqueda: {cleaned_query}**")
+
+        async def _edit(content: str, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> discord.Message:
+            return await progress_message.edit(content=content, embed=embed, view=view)
+
         progress = ProgressReporter(
             f"Búsqueda: {cleaned_query}",
-            lambda content: progress_message.edit(content=content, embed=None, view=None),
+            lambda content: _edit(content),
             logger=LOGGER,
         )
-
-        await progress.mark(format_search_start(result_limit, indexer_ids))
-        if inferred_category:
-            await progress.mark(f"Categoría inferida: {inferred_category}")
-        try:
-            results = await self.prowlarr_client.search(
-                cleaned_query,
-                categories=categories,
-                limit=result_limit,
-                indexer_ids=indexer_ids,
-            )
-        except Exception as exc:
-            LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
-            await progress_message.edit(
-                content=(
-                    progress.render("Búsqueda fallida")
-                    + "\n"
-                    + get_search_error_message(exc, self.config.prowlarr_timeout)
-                ),
-                embed=None,
-                view=None,
-            )
-            return
-
-        await progress.mark(f"Búsqueda finalizada: {len(results)} resultados")
-        results = await apply_search_result_limit(results, result_limit, progress)
-
-        if not results:
-            await progress_message.edit(
-                content=progress.render("Sin resultados") + f"\nNo se encontraron resultados para: {cleaned_query}",
-                embed=None,
-                view=None,
-            )
-            return
-
-        deduped = dedupe_by_info_hash(results)
-        await progress.mark(f"Deduplicación lista: {len(deduped)} resultados únicos")
-
-        view = self.create_search_view(
-            results=deduped,
-            query=cleaned_query,
+        await _run_search_pipeline(
+            prowlarr_client=self.prowlarr_client,
+            config=self.config,
+            delivery_service=self.delivery_service,
+            progress=progress,
+            cleaned_query=cleaned_query,
+            categories=categories,
+            inferred_category=inferred_category,
+            result_limit=result_limit,
+            indexer_ids=indexer_ids,
+            min_seeders=0,
+            año=None,
             author_id=message.author.id,
-            search_timing_lines=progress.lines,
+            ephemeral=False,
+            edit_fn=_edit,
         )
-        await progress.mark("Vista de resultados lista")
-        await progress_message.edit(
-            content=progress.render("Resultados listos"),
-            embed=view.build_embed(),
-            view=view,
-        )
-        view.message = progress_message
 
 
 async def execute_search(
@@ -306,67 +326,32 @@ async def execute_search(
     result_limit = get_search_result_limit(client.config, avanzada)
     indexer_ids = get_search_indexer_ids(client.config, avanzada)
     await interaction.response.defer(thinking=True, ephemeral=privada)
-    progress = ProgressReporter(
-        f"Búsqueda: {cleaned_query}",
-        lambda content: interaction.edit_original_response(content=content, embed=None, view=None),
-        logger=LOGGER,
-    )
-
     categories, inferred_category = infer_categories(cleaned_query, categoria)
 
-    await progress.mark(format_search_start(result_limit, indexer_ids))
-    if inferred_category:
-        await progress.mark(f"Categoría inferida: {inferred_category}")
-    try:
-        results = await client.prowlarr_client.search(
-            cleaned_query,
-            categories=categories,
-            limit=result_limit,
-            indexer_ids=indexer_ids,
-        )
-    except Exception as exc:
-        LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
-        await interaction.edit_original_response(
-            content=(
-                progress.render("Búsqueda fallida")
-                + "\n"
-                + get_search_error_message(exc, client.config.prowlarr_timeout)
-            ),
-            embed=None,
-            view=None,
-        )
-        return
+    async def _edit(content: str, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> discord.InteractionMessage:
+        return await interaction.edit_original_response(content=content, embed=embed, view=view)
 
-    await progress.mark(f"Búsqueda finalizada: {len(results)} resultados")
-    results = await apply_search_result_limit(results, result_limit, progress)
-
-    await progress.mark("Aplicando filtros")
-    filtered = apply_filters(results, min_seeders=min_seeders, year=año)
-    deduped = dedupe_by_info_hash(filtered)
-    await progress.mark(f"Filtros listos: {len(deduped)} resultados visibles")
-
-    if not deduped:
-        await interaction.edit_original_response(
-            content=progress.render("Sin resultados") + f"\nNo se encontraron resultados para: {cleaned_query}",
-            embed=None,
-            view=None,
-        )
-        return
-
-    view = client.create_search_view(
-        results=deduped,
-        query=cleaned_query,
+    progress = ProgressReporter(
+        f"Búsqueda: {cleaned_query}",
+        lambda content: _edit(content),
+        logger=LOGGER,
+    )
+    await _run_search_pipeline(
+        prowlarr_client=client.prowlarr_client,
+        config=client.config,
+        delivery_service=client.delivery_service,
+        progress=progress,
+        cleaned_query=cleaned_query,
+        categories=categories,
+        inferred_category=inferred_category,
+        result_limit=result_limit,
+        indexer_ids=indexer_ids,
+        min_seeders=min_seeders,
+        año=año,
         author_id=interaction.user.id,
         ephemeral=privada,
-        search_timing_lines=progress.lines,
+        edit_fn=_edit,
     )
-    await progress.mark("Vista de resultados lista")
-    message = await interaction.edit_original_response(
-        content=progress.render("Resultados listos"),
-        embed=view.build_embed(),
-        view=view,
-    )
-    view.message = message
 
 
 def _format_uptime(seconds: float) -> str:
