@@ -263,8 +263,6 @@ class ResultDeliveryService:
                 title=title,
                 raw_magnet_url=None if magnet_http_url else magnet_url,
             )
-            if subtitle_languages:
-                content += "\n" + f"📄 Subtítulos adjuntos: {', '.join(subtitle_languages)}"
             content = self._append_progress_summary(content, progress, search_timing_lines)
 
             sent_message = await self._edit_or_send_final_message(
@@ -272,12 +270,20 @@ class ResultDeliveryService:
                 progress_message=progress_message,
                 content=content,
                 view=build_links_view(magnet_http_url),
-                file_payloads=file_payloads,
+                file_payloads=[],
                 ephemeral=ephemeral,
             )
 
+            files_message = await self._send_files_message(
+                interaction=interaction,
+                file_payloads=file_payloads,
+                subtitle_languages=subtitle_languages,
+                ephemeral=ephemeral,
+            ) if file_payloads else None
+
         else:
             self._cancel_subtitle_task(subtitle_task)
+            files_message = None
             sent_message = await self._edit_or_send_final_message(
                 interaction=interaction,
                 progress_message=progress_message,
@@ -294,6 +300,7 @@ class ResultDeliveryService:
                     entry_id,
                     channel_id,
                     sent_message.id,
+                    files_message_id=files_message.id if files_message is not None else None,
                 )
 
         if not ephemeral:
@@ -394,6 +401,36 @@ class ResultDeliveryService:
             discord.File(fp=BytesIO(file_bytes), filename=filename)
             for filename, file_bytes in file_payloads
         ]
+
+    def _build_files_label(self, file_payloads: list[FilePayload], subtitle_languages: list[str]) -> str:
+        parts = []
+        if any(name.endswith(".torrent") for name, _ in file_payloads):
+            parts.append("📦 Torrent")
+        if subtitle_languages:
+            parts.append("📄 Subtítulo " + " · ".join(subtitle_languages))
+        return "  ·  ".join(parts) if parts else "📎 Adjuntos"
+
+    async def _send_files_message(
+        self,
+        interaction: discord.Interaction,
+        file_payloads: list[FilePayload],
+        subtitle_languages: list[str],
+        ephemeral: bool,
+    ) -> discord.Message | None:
+        label = self._build_files_label(file_payloads, subtitle_languages)
+        files = self._build_files(file_payloads)
+        try:
+            if not ephemeral and interaction.channel is not None:
+                return await interaction.channel.send(content=label, files=files)
+            return await interaction.followup.send(
+                content=label,
+                files=files,
+                ephemeral=ephemeral,
+                wait=True,
+            )
+        except discord.HTTPException:
+            LOGGER.warning("No se pudo enviar el mensaje de adjuntos.", exc_info=True)
+            return None
 
     def _append_progress_summary(
         self,

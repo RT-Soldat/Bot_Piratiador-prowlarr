@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from .client import ProwlarrDiscordClient, register_commands
 from .config import configure_logging, load_config
-from .http_server import TorrentRegistry, start_http_server
+from .http_server import ChannelRegistry, TorrentRegistry, start_http_server
 from .prowlarr import ProwlarrClient
 from .rate_limit import RateLimiter
 from .result_delivery import ResultDeliveryService
@@ -33,6 +33,7 @@ async def async_main() -> None:
         data_dir=config.registry_data_dir,
         ttl_seconds=config.registry_ttl_seconds,
     )
+    channel_registry = ChannelRegistry(data_dir=config.registry_data_dir)
     http_runner = await start_http_server(
         config.http_listen_host,
         config.http_listen_port,
@@ -99,6 +100,7 @@ async def async_main() -> None:
         delivery_service=delivery_service,
         torrent_builder=torrent_builder,
         rate_limiter=rate_limiter,
+        channel_registry=channel_registry,
         on_ready_once=on_ready_once,
     )
     register_commands(client)

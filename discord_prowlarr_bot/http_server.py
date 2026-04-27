@@ -24,6 +24,7 @@ class TorrentEntry:
     expires_at: float
     channel_id: int | None = None
     message_id: int | None = None
+    files_message_id: int | None = None
 
 
 class TorrentRegistry:
@@ -67,6 +68,7 @@ class TorrentRegistry:
                     expires_at=float(data.get("expires_at", 0)),
                     channel_id=data.get("channel_id"),
                     message_id=data.get("message_id"),
+                    files_message_id=data.get("files_message_id"),
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 LOGGER.warning("Entry corrupta en %s, borrando.", meta_file)
@@ -116,6 +118,7 @@ class TorrentRegistry:
         entry_id: str,
         channel_id: int,
         message_id: int,
+        files_message_id: int | None = None,
     ) -> None:
         async with self._lock:
             entry = self._entries.get(entry_id)
@@ -124,11 +127,24 @@ class TorrentRegistry:
 
             entry.channel_id = channel_id
             entry.message_id = message_id
+            entry.files_message_id = files_message_id
             await asyncio.to_thread(self._write_meta, entry_id, entry)
 
     async def count(self) -> int:
         async with self._lock:
             return len(self._entries)
+
+    async def purge_channel(self, channel_id: int) -> int:
+        async with self._lock:
+            to_remove = [
+                key for key, entry in self._entries.items()
+                if entry.channel_id == channel_id
+            ]
+            for key in to_remove:
+                self._entries.pop(key, None)
+                self._meta_path(key).unlink(missing_ok=True)
+                self._torrent_path(key).unlink(missing_ok=True)
+            return len(to_remove)
 
     def _persist_entry(self, entry_id: str, entry: TorrentEntry, torrent_bytes: bytes | None) -> None:
         self._write_meta(entry_id, entry)
@@ -203,16 +219,58 @@ class TorrentRegistry:
             return
 
         for _, entry in expired:
-            if entry.channel_id is None or entry.message_id is None:
+            if entry.channel_id is None:
                 continue
-            try:
-                await deleter(entry.channel_id, entry.message_id)
-            except Exception:
-                LOGGER.exception(
-                    "No se pudo borrar el mensaje de Discord channel=%s message=%s.",
-                    entry.channel_id,
-                    entry.message_id,
-                )
+            for msg_id in filter(None, [entry.message_id, entry.files_message_id]):
+                try:
+                    await deleter(entry.channel_id, msg_id)
+                except Exception:
+                    LOGGER.exception(
+                        "No se pudo borrar el mensaje de Discord channel=%s message=%s.",
+                        entry.channel_id,
+                        msg_id,
+                    )
+
+
+class ChannelRegistry:
+    """Persiste los channel IDs configurados dinámicamente vía /configurar-canal."""
+
+    def __init__(self, data_dir: Path) -> None:
+        self._path = data_dir / "channels.json"
+        self._channel_ids: set[int] = self._load()
+
+    def _load(self) -> set[int]:
+        if not self._path.exists():
+            return set()
+        try:
+            data = json.loads(self._path.read_text())
+            return {int(x) for x in data.get("channel_ids", [])}
+        except (OSError, ValueError, json.JSONDecodeError):
+            LOGGER.warning("No se pudo cargar el registro de canales desde %s.", self._path)
+            return set()
+
+    def _save(self) -> None:
+        self._path.write_text(json.dumps({"channel_ids": list(self._channel_ids)}))
+
+    def add(self, channel_id: int) -> bool:
+        if channel_id in self._channel_ids:
+            return False
+        self._channel_ids.add(channel_id)
+        self._save()
+        return True
+
+    def remove(self, channel_id: int) -> bool:
+        if channel_id not in self._channel_ids:
+            return False
+        self._channel_ids.discard(channel_id)
+        self._save()
+        return True
+
+    def __contains__(self, channel_id: int) -> bool:
+        return channel_id in self._channel_ids
+
+    def all_ids(self) -> list[int]:
+        return list(self._channel_ids)
 
 
 async def start_http_server(host: str, port: int, registry: TorrentRegistry) -> web.AppRunner:

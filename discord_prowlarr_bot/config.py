@@ -12,7 +12,7 @@ LOGGER = logging.getLogger("discord_prowlarr_bot")
 @dataclass(slots=True)
 class Config:
     discord_token: str
-    allowed_channel_id: int
+    allowed_channel_ids: list[int]
     prowlarr_url: str
     prowlarr_api_key: str
     prowlarr_timeout: float = 90.0
@@ -59,13 +59,15 @@ def load_config() -> Config:
     channel_raw = os.getenv("ALLOWED_CHANNEL_ID", "").strip()
     if not channel_raw:
         missing.append("ALLOWED_CHANNEL_ID")
-        allowed_channel_id = 0
+        allowed_channel_ids: list[int] = []
     else:
         try:
-            allowed_channel_id = int(channel_raw)
+            allowed_channel_ids = [int(x.strip()) for x in channel_raw.split(",") if x.strip()]
         except ValueError:
-            LOGGER.error("ALLOWED_CHANNEL_ID debe ser un entero valido.")
+            LOGGER.error("ALLOWED_CHANNEL_ID debe ser un entero o lista separada por comas. Ej: 123,456")
             raise SystemExit(1) from None
+        if not allowed_channel_ids:
+            missing.append("ALLOWED_CHANNEL_ID")
 
     prowlarr_url = os.getenv("PROWLARR_URL", "").strip()
     if not prowlarr_url:
@@ -178,7 +180,7 @@ def load_config() -> Config:
 
     return Config(
         discord_token=discord_token,
-        allowed_channel_id=allowed_channel_id,
+        allowed_channel_ids=allowed_channel_ids,
         prowlarr_url=prowlarr_url.rstrip("/"),
         prowlarr_api_key=prowlarr_api_key,
         prowlarr_timeout=prowlarr_timeout,

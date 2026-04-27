@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 
 from .config import Config
+from .http_server import ChannelRegistry
 from .progress import ProgressReporter
 from .rate_limit import RateLimiter
 from .result_delivery import ResultDeliveryService
@@ -164,6 +165,7 @@ class ProwlarrDiscordClient(discord.Client):
         delivery_service: ResultDeliveryService,
         torrent_builder: TorrentBuilder,
         rate_limiter: RateLimiter,
+        channel_registry: ChannelRegistry,
         on_ready_once: Any = None,
     ) -> None:
         intents = discord.Intents.default()
@@ -174,26 +176,25 @@ class ProwlarrDiscordClient(discord.Client):
         self.prowlarr_client = delivery_service.prowlarr_client
         self.torrent_builder = torrent_builder
         self.rate_limiter = rate_limiter
+        self.channel_registry = channel_registry
         self.tree = app_commands.CommandTree(self)
         self._commands_synced = False
         self._on_ready_once = on_ready_once
         self.started_at = time.monotonic()
 
+    def is_channel_allowed(self, channel_id: int | None) -> bool:
+        if channel_id is None:
+            return False
+        return channel_id in self.config.allowed_channel_ids or channel_id in self.channel_registry
+
     async def on_ready(self) -> None:
         if not self._commands_synced:
+            for guild in self.guilds:
+                self.tree.clear_commands(guild=guild)
+                await self.tree.sync(guild=guild)
+
             global_synced = await self.tree.sync()
             LOGGER.info("Se sincronizaron %s slash commands globales.", len(global_synced))
-
-            for guild in self.guilds:
-                self.tree.copy_global_to(guild=guild)
-                guild_synced = await self.tree.sync(guild=guild)
-                LOGGER.info(
-                    "Se sincronizaron %s slash commands en el servidor %s (%s).",
-                    len(guild_synced),
-                    guild.name,
-                    guild.id,
-                )
-
             self._commands_synced = True
 
             if self._on_ready_once is not None:
@@ -225,7 +226,7 @@ class ProwlarrDiscordClient(discord.Client):
             message.channel.id,
         )
 
-        if message.channel.id != self.config.allowed_channel_id:
+        if not self.is_channel_allowed(message.channel.id):
             await message.reply(
                 "Este comando solo funciona en el canal designado.",
                 mention_author=False,
@@ -303,7 +304,7 @@ async def execute_search(
         avanzada,
     )
 
-    if interaction.channel_id != client.config.allowed_channel_id:
+    if not client.is_channel_allowed(interaction.channel_id):
         await interaction.response.send_message(
             "Este comando solo funciona en el canal designado.",
             ephemeral=True,
@@ -488,3 +489,62 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
 
         content += "\n\nPara limitar búsquedas rápidas, usa `PROWLARR_SEARCH_INDEXER_IDS=1,2,3`."
         await interaction.followup.send(content=content[:1900], ephemeral=True)
+
+    @client.tree.command(name="configurar-canal", description="Activa el bot en este canal (requiere Manage Guild)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def configurar_canal(interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        if channel_id is None:
+            await interaction.response.send_message("No se pudo determinar el canal.", ephemeral=True)
+            return
+
+        if channel_id in client.config.allowed_channel_ids:
+            await interaction.response.send_message(
+                "Este canal ya está configurado en las variables de entorno.", ephemeral=True
+            )
+            return
+
+        is_new = client.channel_registry.add(channel_id)
+        if is_new:
+            await interaction.response.send_message(
+                f"✅ Canal <#{channel_id}> activado. Usá `/buscar` o `/piratear` para buscar.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message("Este canal ya estaba activado.", ephemeral=True)
+
+    @client.tree.command(name="desactivar-canal", description="Desactiva el bot en este canal (requiere Manage Guild)")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def desactivar_canal(interaction: discord.Interaction) -> None:
+        channel_id = interaction.channel_id
+        if channel_id is None:
+            await interaction.response.send_message("No se pudo determinar el canal.", ephemeral=True)
+            return
+
+        if channel_id in client.config.allowed_channel_ids:
+            await interaction.response.send_message(
+                "Este canal está fijo en las variables de entorno y no puede desactivarse desde aquí.",
+                ephemeral=True,
+            )
+            return
+
+        removed = client.channel_registry.remove(channel_id)
+        msg = "✅ Canal desactivado." if removed else "Este canal no estaba activado dinámicamente."
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @client.tree.command(name="limpiar", description="Elimina los mensajes del canal y limpia el registro")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    async def limpiar(interaction: discord.Interaction) -> None:
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("Solo funciona en canales de texto.", ephemeral=True)
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+
+        registry_count = await client.delivery_service.registry.purge_channel(interaction.channel.id)
+        deleted = await interaction.channel.purge(limit=1000)
+
+        await interaction.followup.send(
+            f"✅ {len(deleted)} mensajes eliminados · {registry_count} entradas del registro limpiadas.",
+            ephemeral=True,
+        )
