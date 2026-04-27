@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 
 from .config import Config
+from .progress import ProgressReporter
 from .rate_limit import RateLimiter
 from .result_delivery import ResultDeliveryService
 from .search_utils import (
@@ -22,6 +23,41 @@ from .torrent_builder import TorrentBuilder
 from .views import SearchView
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
+ADVANCED_SEARCH_FLAGS = {"--avanzada", "--avanzado", "--full", "--todo", "--todos"}
+
+
+def extract_advanced_search_flag(query: str) -> tuple[str, bool]:
+    parts = query.split()
+    filtered_parts = [
+        part
+        for part in parts
+        if part.strip().lower() not in ADVANCED_SEARCH_FLAGS
+    ]
+    return " ".join(filtered_parts), len(filtered_parts) != len(parts)
+
+
+def get_search_result_limit(config: Config, avanzada: bool) -> int | None:
+    if avanzada or config.search_result_limit == 0:
+        return None
+    return config.search_result_limit
+
+
+def format_search_start(result_limit: int | None) -> str:
+    if result_limit is None:
+        return "Inicia búsqueda avanzada en Prowlarr (sin límite local)"
+    return f"Inicia búsqueda en Prowlarr (límite: {result_limit})"
+
+
+async def apply_search_result_limit(
+    results: list[dict[str, Any]],
+    result_limit: int | None,
+    progress: ProgressReporter,
+) -> list[dict[str, Any]]:
+    if result_limit is None or len(results) <= result_limit:
+        return results
+
+    await progress.mark(f"Limitando a primeros {result_limit} resultados")
+    return results[:result_limit]
 
 
 class ProwlarrDiscordClient(discord.Client):
@@ -126,32 +162,62 @@ class ProwlarrDiscordClient(discord.Client):
             await message.reply(validation_error, mention_author=False)
             return
 
-        cleaned_query = raw_query.strip()
+        cleaned_query, avanzada = extract_advanced_search_flag(raw_query)
+        validation_error = validate_query(cleaned_query)
+        if validation_error:
+            await message.reply(validation_error, mention_author=False)
+            return
 
-        async with message.channel.typing():
-            try:
-                results = await self.prowlarr_client.search(cleaned_query)
-            except Exception as exc:
-                LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
-                await message.reply(
-                    get_search_error_message(exc, self.config.prowlarr_timeout),
-                    mention_author=False,
-                )
-                return
+        result_limit = get_search_result_limit(self.config, avanzada)
+        progress_message = await message.channel.send(f"⏱️ **Búsqueda: {cleaned_query}**")
+        progress = ProgressReporter(
+            f"Búsqueda: {cleaned_query}",
+            lambda content: progress_message.edit(content=content, embed=None, view=None),
+            logger=LOGGER,
+        )
+
+        await progress.mark(format_search_start(result_limit))
+        try:
+            results = await self.prowlarr_client.search(cleaned_query, limit=result_limit)
+        except Exception as exc:
+            LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
+            await progress_message.edit(
+                content=(
+                    progress.render("Búsqueda fallida")
+                    + "\n"
+                    + get_search_error_message(exc, self.config.prowlarr_timeout)
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+
+        await progress.mark(f"Búsqueda finalizada: {len(results)} resultados")
+        results = await apply_search_result_limit(results, result_limit, progress)
 
         if not results:
-            await message.channel.send(f"No se encontraron resultados para: {cleaned_query}")
+            await progress_message.edit(
+                content=progress.render("Sin resultados") + f"\nNo se encontraron resultados para: {cleaned_query}",
+                embed=None,
+                view=None,
+            )
             return
 
         deduped = dedupe_by_info_hash(results)
+        await progress.mark(f"Deduplicación lista: {len(deduped)} resultados únicos")
 
         view = self.create_search_view(
             results=deduped,
             query=cleaned_query,
             author_id=message.author.id,
         )
-        sent_message = await message.channel.send(embed=view.build_embed(), view=view)
-        view.message = sent_message
+        await progress.mark("Vista de resultados lista")
+        await progress_message.edit(
+            content=progress.render("Resultados listos"),
+            embed=view.build_embed(),
+            view=view,
+        )
+        view.message = progress_message
 
 
 async def execute_search(
@@ -162,9 +228,10 @@ async def execute_search(
     min_seeders: int = 0,
     año: int | None = None,
     privada: bool = False,
+    avanzada: bool = False,
 ) -> None:
     LOGGER.info(
-        "Slash command ejecutado: user=%s channel=%s query=%r categoria=%s min_seeders=%s año=%s privada=%s",
+        "Slash command ejecutado: user=%s channel=%s query=%r categoria=%s min_seeders=%s año=%s privada=%s avanzada=%s",
         interaction.user.id,
         interaction.channel_id,
         query,
@@ -172,6 +239,7 @@ async def execute_search(
         min_seeders,
         año,
         privada,
+        avanzada,
     )
 
     if interaction.channel_id != client.config.allowed_channel_id:
@@ -194,27 +262,49 @@ async def execute_search(
         return
 
     cleaned_query = query.strip()
+    result_limit = get_search_result_limit(client.config, avanzada)
     await interaction.response.defer(thinking=True, ephemeral=privada)
+    progress = ProgressReporter(
+        f"Búsqueda: {cleaned_query}",
+        lambda content: interaction.edit_original_response(content=content, embed=None, view=None),
+        logger=LOGGER,
+    )
 
     categories = CATEGORY_CHOICES.get(categoria) if categoria else None
 
+    await progress.mark(format_search_start(result_limit))
     try:
-        results = await client.prowlarr_client.search(cleaned_query, categories=categories)
+        results = await client.prowlarr_client.search(
+            cleaned_query,
+            categories=categories,
+            limit=result_limit,
+        )
     except Exception as exc:
         LOGGER.exception("Error consultando Prowlarr para la query '%s'.", cleaned_query)
-        await interaction.followup.send(
-            get_search_error_message(exc, client.config.prowlarr_timeout),
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content=(
+                progress.render("Búsqueda fallida")
+                + "\n"
+                + get_search_error_message(exc, client.config.prowlarr_timeout)
+            ),
+            embed=None,
+            view=None,
         )
         return
 
+    await progress.mark(f"Búsqueda finalizada: {len(results)} resultados")
+    results = await apply_search_result_limit(results, result_limit, progress)
+
+    await progress.mark("Aplicando filtros")
     filtered = apply_filters(results, min_seeders=min_seeders, year=año)
     deduped = dedupe_by_info_hash(filtered)
+    await progress.mark(f"Filtros listos: {len(deduped)} resultados visibles")
 
     if not deduped:
-        await interaction.followup.send(
-            f"No se encontraron resultados para: {cleaned_query}",
-            ephemeral=privada,
+        await interaction.edit_original_response(
+            content=progress.render("Sin resultados") + f"\nNo se encontraron resultados para: {cleaned_query}",
+            embed=None,
+            view=None,
         )
         return
 
@@ -224,11 +314,11 @@ async def execute_search(
         author_id=interaction.user.id,
         ephemeral=privada,
     )
-    message = await interaction.followup.send(
+    await progress.mark("Vista de resultados lista")
+    message = await interaction.edit_original_response(
+        content=progress.render("Resultados listos"),
         embed=view.build_embed(),
         view=view,
-        wait=True,
-        ephemeral=privada,
     )
     view.message = message
 
@@ -265,6 +355,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         min_seeders="Mínimo de seeders",
         año="Filtrar por año en el título",
         privada="Mostrar los resultados solo a vos",
+        avanzada="Traer todos los resultados en vez de limitar a los primeros",
     )
     @app_commands.choices(categoria=categoria_choices)
     async def buscar(
@@ -274,6 +365,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         min_seeders: int = 0,
         año: int | None = None,
         privada: bool = False,
+        avanzada: bool = False,
     ) -> None:
         await execute_search(
             interaction,
@@ -283,6 +375,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
             min_seeders=min_seeders,
             año=año,
             privada=privada,
+            avanzada=avanzada,
         )
 
     @client.tree.command(name="piratear", description="Alias de /buscar para buscar torrents")
@@ -292,6 +385,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         min_seeders="Mínimo de seeders",
         año="Filtrar por año en el título",
         privada="Mostrar los resultados solo a vos",
+        avanzada="Traer todos los resultados en vez de limitar a los primeros",
     )
     @app_commands.choices(categoria=categoria_choices)
     async def piratear(
@@ -301,6 +395,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
         min_seeders: int = 0,
         año: int | None = None,
         privada: bool = False,
+        avanzada: bool = False,
     ) -> None:
         await execute_search(
             interaction,
@@ -310,6 +405,7 @@ def register_commands(client: ProwlarrDiscordClient) -> None:
             min_seeders=min_seeders,
             año=año,
             privada=privada,
+            avanzada=avanzada,
         )
 
     @client.tree.command(name="status", description="Muestra el estado del bot y de Prowlarr")

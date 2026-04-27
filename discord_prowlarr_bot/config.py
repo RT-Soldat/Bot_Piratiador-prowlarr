@@ -28,6 +28,7 @@ class Config:
     registry_data_dir: Path = Path("/app/data/registry")
     rate_limit_calls: int = 5
     rate_limit_window_seconds: int = 60
+    search_result_limit: int = 10
     subtitle_enabled: bool = True
     opensubtitles_api_key: str = ""
     opensubtitles_username: str = ""
@@ -121,6 +122,11 @@ def load_config() -> Config:
         LOGGER.error("RATE_LIMIT_WINDOW_SECONDS debe ser mayor que 0.")
         raise SystemExit(1)
 
+    search_result_limit = parse_int_env("SEARCH_RESULT_LIMIT", 10)
+    if search_result_limit < 0:
+        LOGGER.error("SEARCH_RESULT_LIMIT debe ser 0 o mayor.")
+        raise SystemExit(1)
+
     subtitle_enabled = parse_bool_env("SUBTITLE_ENABLED", True)
     opensubtitles_api_key = os.getenv("OPENSUBTITLES_API_KEY", "").strip()
     opensubtitles_username = os.getenv("OPENSUBTITLES_USERNAME", "").strip()
@@ -185,6 +191,7 @@ def load_config() -> Config:
         registry_data_dir=registry_data_dir,
         rate_limit_calls=rate_limit_calls,
         rate_limit_window_seconds=rate_limit_window_seconds,
+        search_result_limit=search_result_limit,
         subtitle_enabled=subtitle_enabled,
         opensubtitles_api_key=opensubtitles_api_key,
         opensubtitles_username=opensubtitles_username,

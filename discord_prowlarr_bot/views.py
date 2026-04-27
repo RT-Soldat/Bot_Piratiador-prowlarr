@@ -214,12 +214,27 @@ class SearchView(discord.ui.View):
             return
 
         result = self.results[selected_index]
-        await interaction.response.defer(thinking=True, ephemeral=self.ephemeral)
+        title = get_title(result)
+        await interaction.response.edit_message(
+            content=f"⏱️ **Preparando entrega: {truncate(title, 160)}**\n```text\n  0.0s Selección recibida\n```",
+            embed=None,
+            view=None,
+        )
+        progress_message = self.message
+        if progress_message is None:
+            try:
+                progress_message = await interaction.original_response()
+            except discord.HTTPException:
+                progress_message = None
+
+        self.message = None
+        self.stop()
+
         await self.delivery_service.deliver_result(
             interaction,
             result,
             author_id=self.author_id,
-            search_message=self.message,
+            progress_message=progress_message,
             ephemeral=self.ephemeral,
         )
 

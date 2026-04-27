@@ -10,11 +10,11 @@ import discord
 
 from .http_server import TorrentRegistry
 from .magnet import slugify
+from .progress import ProgressReporter
 from .prowlarr import ProwlarrClient
 
 from .search_utils import (
     build_compact_magnet_url,
-    format_timeout_seconds,
     get_download_url,
     get_magnet_url,
     get_title,
@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger("discord_prowlarr_bot")
 _LAST_RESULT_CAP = 200
+_MAX_DISCORD_FILES = 10
+FilePayload = tuple[str, bytes]
 
 
 def build_links_view(
@@ -96,13 +98,13 @@ class ResultDeliveryService:
         interaction: discord.Interaction,
         content: str,
         view: discord.ui.View | None = None,
-        file: discord.File | None = None,
+        files: list[discord.File] | None = None,
         ephemeral: bool = False,
     ) -> discord.Message:
         send_kwargs: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
 
-        if file is not None:
-            send_kwargs["file"] = file
+        if files:
+            send_kwargs["files"] = files
 
         if view is not None:
             send_kwargs["view"] = view
@@ -139,27 +141,55 @@ class ResultDeliveryService:
         *,
         author_id: int | None = None,
         search_message: discord.Message | None = None,
+        progress_message: discord.Message | None = None,
         ephemeral: bool = False,
     ) -> None:
         title = get_title(result)
+        if progress_message is None:
+            progress_message = await interaction.followup.send(
+                f"⏱️ **Preparando entrega: {title}**",
+                wait=True,
+                ephemeral=ephemeral,
+            )
+
+        progress = ProgressReporter(
+            f"Entrega: {title}",
+            lambda content: progress_message.edit(content=content, embed=None, view=None),
+            logger=LOGGER,
+        )
+
+        await progress.mark("Selección recibida")
+
+        subtitle_task = self._start_subtitle_task(title)
+        if subtitle_task is not None:
+            await progress.mark("Búsqueda de subtítulos iniciada")
+        else:
+            await progress.mark("Subtítulos desactivados")
+
         filename = f"{slugify(title)}.torrent"
         download_url = get_download_url(result)
         original_magnet_url = get_magnet_url(result)
         magnet_url = build_compact_magnet_url(result, title, original_magnet_url)
         download_resource = None
-        progress_message: discord.Message | None = None
         magnet_http_url: str | None = None
         entry_id: str | None = None
+
+        await progress.mark("Datos del resultado parseados")
 
         should_resolve_torrent = self.attach_torrent_file
         should_fetch_download = download_url is not None and (
             should_resolve_torrent or magnet_url is None
         )
         if should_fetch_download:
+            await progress.mark("Descarga directa desde Prowlarr iniciada")
             try:
                 download_resource = await self.prowlarr_client.download_resource(download_url)
+                await progress.mark("Descarga directa desde Prowlarr finalizada")
             except Exception:
                 LOGGER.exception("No se pudo descargar el recurso desde Prowlarr para '%s'.", title)
+                await progress.mark("Descarga directa desde Prowlarr falló")
+        elif magnet_url is not None:
+            await progress.mark("Magnet disponible desde el resultado")
 
         if magnet_url is None and download_resource is not None and download_resource.magnet_url:
             magnet_url = build_compact_magnet_url(
@@ -167,6 +197,7 @@ class ResultDeliveryService:
                 title,
                 download_resource.magnet_url,
             )
+            await progress.mark("Magnet extraído desde el recurso descargado")
 
         torrent_bytes = (
             download_resource.torrent_bytes
@@ -175,71 +206,72 @@ class ResultDeliveryService:
         )
 
         if torrent_bytes is None and magnet_url is not None and should_resolve_torrent:
-            progress_message = await interaction.followup.send(
-                (
-                    "⏳ Buscando metadata del torrent vía DHT. "
-                    f"Esto puede tardar hasta {format_timeout_seconds(self.torrent_fetch_timeout)}s..."
-                ),
-                wait=True,
-                ephemeral=ephemeral,
-            )
+            await progress.mark("Resolución de metadata vía DHT iniciada")
             try:
                 torrent_bytes = await self.torrent_builder.fetch_torrent_from_magnet(
                     magnet_url,
                     timeout=self.torrent_fetch_timeout,
                 )
+                await progress.mark("Resolución de metadata vía DHT finalizada")
             except Exception:
                 LOGGER.exception("Falló la generación local del .torrent para '%s'.", title)
-            finally:
-                await self.delete_message_quietly(progress_message)
+                await progress.mark("Resolución de metadata vía DHT falló")
 
         if self.public_base_url and magnet_url is not None:
+            await progress.mark("Registro del link HTTP iniciado")
             entry_id = await self.registry.register(
                 torrent_bytes=torrent_bytes,
                 magnet_url=magnet_url,
                 filename=filename,
             )
             magnet_http_url = f"{self.public_base_url}/m/{entry_id}"
+            await progress.mark("Registro del link HTTP finalizado")
 
         sent_message: discord.Message | None = None
 
         result_delivered = torrent_bytes is not None or magnet_url is not None
 
-        if torrent_bytes is not None:
+        if result_delivered:
+            subtitles = await self._collect_subtitles(subtitle_task, title, progress)
+            file_payloads: list[FilePayload] = []
+            subtitle_languages: list[str] = []
             should_attach_file = self.attach_torrent_file or magnet_url is None
-            file = None
-            if should_attach_file:
-                file = discord.File(
-                    fp=BytesIO(torrent_bytes),
-                    filename=filename,
-                )
+            if torrent_bytes is not None and should_attach_file:
+                file_payloads.append((filename, torrent_bytes))
 
-            sent_message = await self.send_result_message(
-                interaction=interaction,
-                content=self.build_result_content(
-                    title=title,
-                    raw_magnet_url=None if magnet_http_url else magnet_url,
-                ),
-                view=build_links_view(magnet_http_url),
-                file=file,
-                ephemeral=ephemeral,
+            for language, srt_bytes in subtitles:
+                if len(file_payloads) >= _MAX_DISCORD_FILES:
+                    LOGGER.warning("Se omitió subtítulo '%s' para '%s': límite de adjuntos.", language, title)
+                    continue
+
+                subtitle_languages.append(language)
+                file_payloads.append((f"{slugify(title)}.{language}.srt", srt_bytes))
+
+            content = self.build_result_content(
+                title=title,
+                raw_magnet_url=None if magnet_http_url else magnet_url,
             )
+            if subtitle_languages:
+                content += "\n" + f"📄 Subtítulos adjuntos: {', '.join(subtitle_languages)}"
+            content = self._append_progress_summary(content, progress)
 
-        elif magnet_url is not None:
-            sent_message = await self.send_result_message(
+            sent_message = await self._edit_or_send_final_message(
                 interaction=interaction,
-                content=self.build_result_content(
-                    title=title,
-                    raw_magnet_url=None if magnet_http_url else magnet_url,
-                ),
+                progress_message=progress_message,
+                content=content,
                 view=build_links_view(magnet_http_url),
+                file_payloads=file_payloads,
                 ephemeral=ephemeral,
             )
 
         else:
-            sent_message = await self.send_result_message(
+            self._cancel_subtitle_task(subtitle_task)
+            sent_message = await self._edit_or_send_final_message(
                 interaction=interaction,
+                progress_message=progress_message,
                 content=f"❌ No se pudo obtener el torrent para **{title}**. Intentá con otro resultado.",
+                view=None,
+                file_payloads=[],
                 ephemeral=ephemeral,
             )
 
@@ -254,42 +286,111 @@ class ResultDeliveryService:
 
         if not ephemeral:
             await self.replace_last_result_message(interaction, author_id, sent_message)
-        await self.delete_message_quietly(search_message)
 
-        if result_delivered:
-            await self._try_send_subtitles(interaction, title, ephemeral=ephemeral)
+        if search_message is not None and (
+            sent_message is None or search_message.id != sent_message.id
+        ):
+            await self.delete_message_quietly(search_message)
 
-    async def _try_send_subtitles(
+    def _start_subtitle_task(
         self,
-        interaction: discord.Interaction,
         title: str,
-        ephemeral: bool = False,
-    ) -> None:
+    ) -> asyncio.Task[list[tuple[str, bytes]]] | None:
         if self.subtitle_service is None:
-            return
+            return None
 
-        try:
-            subtitles = await asyncio.wait_for(
+        return asyncio.create_task(
+            asyncio.wait_for(
                 self.subtitle_service.find_for_title(title),
                 timeout=self._subtitle_fetch_timeout,
             )
+        )
+
+    async def _collect_subtitles(
+        self,
+        subtitle_task: asyncio.Task[list[tuple[str, bytes]]] | None,
+        title: str,
+        progress: ProgressReporter,
+    ) -> list[tuple[str, bytes]]:
+        if subtitle_task is None:
+            return []
+
+        await progress.mark("Esperando resultado de subtítulos")
+        try:
+            subtitles = await subtitle_task
         except asyncio.TimeoutError:
             LOGGER.warning("Timeout buscando subtítulos para '%s'.", title)
-            return
+            await progress.mark("Timeout buscando subtítulos")
+            return []
+        except asyncio.CancelledError:
+            raise
         except Exception:
             LOGGER.exception("Error buscando subtítulos para '%s'.", title)
-            return
+            await progress.mark("Búsqueda de subtítulos falló")
+            return []
 
-        for language, srt_bytes in subtitles:
+        if subtitles:
+            await progress.mark("Subtítulos listos: " + ", ".join(language for language, _ in subtitles))
+        else:
+            await progress.mark("No se encontraron subtítulos")
+
+        return subtitles
+
+    def _cancel_subtitle_task(self, subtitle_task: asyncio.Task[list[tuple[str, bytes]]] | None) -> None:
+        if subtitle_task is not None and not subtitle_task.done():
+            subtitle_task.cancel()
+
+    async def _edit_or_send_final_message(
+        self,
+        interaction: discord.Interaction,
+        progress_message: discord.Message | None,
+        content: str,
+        view: discord.ui.View | None,
+        file_payloads: list[FilePayload],
+        ephemeral: bool,
+    ) -> discord.Message:
+        if progress_message is not None:
             try:
-                await interaction.followup.send(
-                    f"📄 Subtítulos ({language})",
-                    file=discord.File(
-                        fp=BytesIO(srt_bytes),
-                        filename=f"{slugify(title)}.{language}.srt",
-                    ),
-                    ephemeral=ephemeral,
-                    wait=True,
+                return await progress_message.edit(
+                    content=content,
+                    view=view,
+                    attachments=self._build_files(file_payloads),
                 )
-            except discord.HTTPException:
-                LOGGER.warning("No se pudo enviar el subtítulo '%s' para '%s'.", language, title)
+            except (TypeError, discord.HTTPException):
+                LOGGER.debug("No se pudo convertir el progreso en mensaje final.", exc_info=True)
+
+        if not ephemeral and interaction.channel is not None:
+            sent_message = await interaction.channel.send(
+                content=content,
+                view=view,
+                files=self._build_files(file_payloads) or None,
+            )
+        else:
+            sent_message = await self.send_result_message(
+                interaction=interaction,
+                content=content,
+                view=view,
+                files=self._build_files(file_payloads),
+                ephemeral=ephemeral,
+            )
+
+        await self.delete_message_quietly(progress_message)
+        return sent_message
+
+    def _build_files(self, file_payloads: list[FilePayload]) -> list[discord.File]:
+        return [
+            discord.File(fp=BytesIO(file_bytes), filename=filename)
+            for filename, file_bytes in file_payloads
+        ]
+
+    def _append_progress_summary(self, content: str, progress: ProgressReporter) -> str:
+        summary = progress.render("Tiempos de entrega")
+        full_content = content + "\n\n" + summary
+        if len(full_content) <= 1900:
+            return full_content
+
+        available = 1900 - len(content) - 2
+        if available < 80:
+            return content
+
+        return content + "\n\n" + summary[: available - 3] + "..."

@@ -56,6 +56,7 @@ El directorio `./data/` se crea automáticamente al arrancar. Ahí se persiste e
 | `REGISTRY_DATA_DIR` | `/app/data/registry` | Directorio de persistencia del registry dentro del contenedor |
 | `RATE_LIMIT_CALLS` | `5` | Máximo de búsquedas permitidas por usuario en la ventana |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Ventana del rate limit en segundos |
+| `SEARCH_RESULT_LIMIT` | `10` | Resultados a mostrar por defecto; usa `0` para no limitar |
 | `SUBTITLE_ENABLED` | `true` | Busca subtítulos automáticamente tras entregar un resultado |
 | `OPENSUBTITLES_API_KEY` | — | API key de OpenSubtitles.com |
 | `OPENSUBTITLES_USERNAME` | — | Usuario de OpenSubtitles.com |
@@ -74,7 +75,7 @@ El directorio `./data/` se crea automáticamente al arrancar. Ahí se persiste e
 | `/piratear <query>` | Alias de `/buscar` |
 | `/status` | Muestra estado del bot: ping a Prowlarr, libtorrent, uptime y entradas activas |
 
-También podés escribir `/buscar <query>` como mensaje de texto si `Message Content Intent` está habilitado. Los filtros opcionales solo están disponibles en slash commands.
+También podés escribir `/buscar <query>` como mensaje de texto si `Message Content Intent` está habilitado. Los filtros opcionales solo están disponibles en slash commands, salvo `--avanzada`, que también funciona en texto.
 
 ### Filtros opcionales en `/buscar` y `/piratear`
 
@@ -84,6 +85,7 @@ También podés escribir `/buscar <query>` como mensaje de texto si `Message Con
 | `min_seeders` | Entero | Oculta resultados con menos seeders que este valor |
 | `año` | Entero | Filtra títulos que no contengan ese año |
 | `privada` | Bool | `true` para que solo vos veas los resultados (ephemeral) |
+| `avanzada` | Bool | `true` para traer todos los resultados en vez del límite default |
 
 Los resultados se pueden re-ordenar con los botones **🌱 Seeders**, **📦 Tamaño** y **🗓️ Fecha**. Solo el autor de la búsqueda puede interactuar con la vista.
 

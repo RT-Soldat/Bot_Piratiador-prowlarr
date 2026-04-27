@@ -31,10 +31,13 @@ class ProwlarrClient:
         self,
         query: str,
         categories: list[int] | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         params: list[tuple[str, str]] = [("query", query), ("type", "search")]
         if categories:
             params.extend(("categories", str(cat)) for cat in categories)
+        if limit is not None and limit > 0:
+            params.append(("limit", str(limit)))
 
         response = await self._client.get(
             f"{self.base_url}/api/v1/search",
